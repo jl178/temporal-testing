@@ -10,7 +10,10 @@ from workflow import TASK_QUEUE, EtlPipelineWorkflow
 
 
 async def main() -> None:
-    client = await Client.connect(os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"))
+    client = await Client.connect(
+        os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"),
+        namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
+    )
     result = await client.execute_workflow(
         EtlPipelineWorkflow.run,
         EtlConfig(),

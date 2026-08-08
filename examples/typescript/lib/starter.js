@@ -8,7 +8,10 @@ async function run() {
     const connection = await client_1.Connection.connect({
         address: process.env.TEMPORAL_ADDRESS ?? 'localhost:7233',
     });
-    const client = new client_1.Client({ connection });
+    const client = new client_1.Client({
+        connection,
+        namespace: process.env.TEMPORAL_NAMESPACE ?? 'default',
+    });
     const result = await client.workflow.execute(workflows_1.greetingWorkflow, {
         workflowId: `greeting-typescript-${(0, crypto_1.randomUUID)()}`,
         taskQueue: worker_1.TASK_QUEUE,

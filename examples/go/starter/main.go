@@ -17,7 +17,10 @@ func main() {
 	if hostPort == "" {
 		hostPort = "localhost:7233"
 	}
-	c, err := client.Dial(client.Options{HostPort: hostPort})
+	c, err := client.Dial(client.Options{
+		HostPort:  hostPort,
+		Namespace: os.Getenv("TEMPORAL_NAMESPACE"), // empty string means "default"
+	})
 	if err != nil {
 		log.Fatalf("unable to create Temporal client: %v", err)
 	}

@@ -2,7 +2,10 @@ using Greeting;
 using Temporalio.Client;
 
 var address = Environment.GetEnvironmentVariable("TEMPORAL_ADDRESS") ?? "localhost:7233";
-var client = await TemporalClient.ConnectAsync(new(address));
+var client = await TemporalClient.ConnectAsync(new(address)
+{
+    Namespace = Environment.GetEnvironmentVariable("TEMPORAL_NAMESPACE") ?? "default",
+});
 
 var result = await client.ExecuteWorkflowAsync(
     (GreetingWorkflow wf) => wf.RunAsync("Temporal"),

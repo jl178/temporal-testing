@@ -9,7 +9,7 @@ async function run(): Promise<void> {
   });
   const worker = await Worker.create({
     connection,
-    namespace: 'default',
+    namespace: process.env.TEMPORAL_NAMESPACE ?? 'default',
     taskQueue: TASK_QUEUE,
     workflowsPath: require.resolve('./workflows'),
     activities,

@@ -46,6 +46,13 @@ nix run .#prod-down
 
 Versions are pinned to the newest images with a full set available: server/auto-setup **1.29.1** (auto-setup lags server releases; 1.31.x has no auto-setup image yet) and UI **2.53.1**.
 
+**Multi-team usage:** the prod stack creates per-team **namespaces** — `team-app` (72h retention) and `team-data` (168h, for the ETL pipeline) — via a one-shot `temporal-namespace-setup` container; the containerized worker is pinned to `team-app`. Namespaces are Temporal's tenancy boundary: per-team retention, search attributes, rate limits, and (once auth is on) per-namespace RBAC from JWT claims. Every example and the ETL pipeline honors `TEMPORAL_NAMESPACE` (default `default`):
+
+```sh
+TEMPORAL_NAMESPACE=team-app  python examples/python/starter.py   # handled by the containerized worker
+TEMPORAL_NAMESPACE=team-data ./etl/run.sh                        # data team's pipeline in its own namespace
+```
+
 **Auth:** both compose files run unauthenticated (normal for local dev). For OAuth/OIDC later: the server takes a JWT authorizer + claim mapper pointed at your IdP's JWKS (`TEMPORAL_AUTH_AUTHORIZER=default`, `TEMPORAL_JWT_KEY_SOURCE1=...`), and the UI has built-in OIDC login (`TEMPORAL_AUTH_ENABLED`, `TEMPORAL_AUTH_PROVIDER_URL`, client id/secret). Commented stubs for both are in `docker-compose.prod.yml`; on AWS the same env vars go on the ECS task definitions with Cognito/Okta/Auth0 as the IdP.
 
 Each example's `run.sh` is self-contained: installs dependencies, starts a worker, executes a workflow on its own task queue, and asserts the result (`Hello, Temporal!`). Individual runs:
