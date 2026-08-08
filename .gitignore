@@ -1,0 +1,30 @@
+# Node
+node_modules/
+*.tsbuildinfo
+
+# CDK
+cdk.out/
+infra/cdk.context.json.bak
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Go
+examples/go/bin/
+
+# .NET
+bin/
+obj/
+*.user
+
+# Nix / direnv
+.direnv/
+result
+
+# Misc
+.DS_Store
+*.log
+.env
