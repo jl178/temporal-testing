@@ -53,8 +53,8 @@
             prod-down = mkApp "prod-down" ''docker compose -f docker-compose.prod.yml down "$@"'';
             catalog-up = mkApp "catalog-up" ''docker compose -f docker-compose.catalog.yml up -d'';
             catalog-down = mkApp "catalog-down" ''docker compose -f docker-compose.catalog.yml down "$@"'';
-            sftp-up = mkApp "sftp-up" ''docker compose -f docker-compose.sftp.yml up -d'';
-            sftp-down = mkApp "sftp-down" ''docker compose -f docker-compose.sftp.yml down "$@"'';
+            sftp-up = mkApp "sftp-up" ''docker compose up -d sftp'';
+            sftp-down = mkApp "sftp-down" ''docker compose rm -sf sftp'';
             examples = mkApp "examples" ''exec scripts/validate-local.sh "$@"'';
             infra-test = mkApp "infra-test" ''
               cd infra

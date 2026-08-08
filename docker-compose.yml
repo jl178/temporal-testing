@@ -61,6 +61,17 @@ services:
     networks:
       - temporal-network
 
+  # Test SFTP server for the file-ingestion pipeline (etl/ingest/).
+  # User demo/demo, files under /upload, host port 2222.
+  sftp:
+    image: atmoz/sftp:alpine
+    container_name: etl-sftp
+    command: demo:demo:::upload
+    ports:
+      - "2222:22"
+    networks:
+      - temporal-network
+
 networks:
   temporal-network:
     name: temporal-network

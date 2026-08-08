@@ -169,10 +169,11 @@ SFTP ──▶ s3://etl-data/landing/ ──▶ s3://etl-data/staged/ ──▶ 
 5. **Child workflow dispatch** — the job runs as a child `EtlPipelineWorkflow` on the `etl-pipeline` queue (its own workflow ID `transform-<route>-<file>` for lineage, its own retries, optionally its own worker fleet), writing the curated output to S3.
 
 ```sh
-nix run .#sftp-up        # throwaway SFTP server on :2222 (demo/demo)
 ./etl/ingest/run.sh      # seeds a vendor file over SFTP, runs the full chain,
                          # prints INGEST PIPELINE: PASS
 ```
+
+The SFTP test server (`atmoz/sftp`, `demo`/`demo` on :2222) is part of the dev compose config — it comes up with `nix run .#up`, is auto-started by `run.sh` if missing, and can be managed alone with `nix run .#sftp-up` / `.#sftp-down`.
 
 The parent and child workflows show up separately in the UI (`file-ingest-*` → `transform-orders-*`), which is the lineage story: per-file, per-route history, independently retryable.
 

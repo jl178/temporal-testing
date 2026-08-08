@@ -17,9 +17,10 @@ if ! curl -s -o /dev/null --max-time 5 "$AWS_ENDPOINT_URL"; then
   echo "ERROR: no AWS emulator at $AWS_ENDPOINT_URL (pip install localemu && localemu start)" >&2
   exit 1
 fi
+# SFTP test server is part of the dev compose config; start it if needed.
 if ! docker ps --format '{{.Names}}' | grep -q '^etl-sftp$'; then
-  echo "ERROR: SFTP test container not running (nix run .#sftp-up)" >&2
-  exit 1
+  (cd .. && docker compose up -d sftp)
+  sleep 2
 fi
 
 if [ ! -d .venv ]; then
