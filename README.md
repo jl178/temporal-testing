@@ -150,6 +150,32 @@ curl -s localhost:8181/v1/namespaces          # -> raw, analytics (persisted tab
 
 Honest scoping: FOSS emulators only implement the EMR Serverless **control plane** — job runs transition to `SUCCESS` but execute nothing — so the pipeline exercises the real submit/poll orchestration against the emulator while the identical transformation runs as local Spark compute. Pointed at real AWS (unset `AWS_ENDPOINT_URL`, real role ARN), the same submission path actually executes `spark_job.py` on EMR Serverless.
 
+## File-ingestion pipeline (SFTP → S3 → parse → dispatch)
+
+`etl/ingest/` chains a file-delivery front end onto the transform pipeline:
+
+```
+SFTP ──▶ s3://etl-data/landing/ ──▶ s3://etl-data/staged/ ──▶ s3://etl-data/curated/
+     land            rules-based parse         │  dbt-Spark child workflow
+                                          classify ──▶ registry ──▶ transform-spec-1
+```
+
+`FileIngestWorkflow` (task queue `file-ingest`) runs, per discovered file:
+
+1. **`land_sftp_file`** — streams the file from SFTP into the landing zone (heartbeats make big transfers crash-resumable; a per-file workflow ID doubles as the exactly-once guard).
+2. **`parse_file`** — a generic, declarative parser: the config's ordered rules (`lowercase_headers`, `rename`, `cast`, `strip`, `drop`, `constant` with `{{ macros }}`) normalize the messy vendor CSV into parquet in the staged zone. New source format = new rule list, no code.
+3. **`classify_file`** — reads the routing field (`record_type`) from the staged data.
+4. **`resolve_transform_spec`** — registry lookup: `etl/specs/registry.json` maps the route value to a spec file (`transform-spec-1.json`), which becomes a `DbtSparkJob` with the staged file wired in as its input. **Adding a new file type = adding a spec file + one registry line.**
+5. **Child workflow dispatch** — the job runs as a child `EtlPipelineWorkflow` on the `etl-pipeline` queue (its own workflow ID `transform-<route>-<file>` for lineage, its own retries, optionally its own worker fleet), writing the curated output to S3.
+
+```sh
+nix run .#sftp-up        # throwaway SFTP server on :2222 (demo/demo)
+./etl/ingest/run.sh      # seeds a vendor file over SFTP, runs the full chain,
+                         # prints INGEST PIPELINE: PASS
+```
+
+The parent and child workflows show up separately in the UI (`file-ingest-*` → `transform-orders-*`), which is the lineage story: per-file, per-route history, independently retryable.
+
 ## Repository layout
 
 ```
@@ -157,6 +183,8 @@ docker-compose.yml     # postgres:16 + temporalio/auto-setup + temporalio/ui + a
 dynamicconfig/         # Temporal dynamic config mounted into the server
 examples/{python,go,typescript,csharp}/
 etl/                   # Temporal-orchestrated batch ETL: EMR Serverless + dbt-Spark
+etl/ingest/            # SFTP -> landing -> parse -> classify -> dispatch (parent workflow)
+etl/specs/             # transform-spec registry (route value -> DbtSparkJob template)
 infra/                 # CDK v2 app (TypeScript) + jest assertion tests
 scripts/               # validate-local.sh, validate-emulator.sh
 flake.nix              # dev shell + task-runner apps (nix run .#<up|down|examples|infra-test|synth|validate-emulator|validate>)

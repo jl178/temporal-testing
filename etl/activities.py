@@ -80,6 +80,9 @@ class DbtSparkJob:
     #    "warehouse": "s3://etl-data/warehouse"}         (local Iceberg REST)
     #   {"type": "glue", "name": "lake", "warehouse": "s3://bucket/warehouse"}
     catalog: dict | None = None
+    # Demo-only: seed the orders CSV as the first input. False when the
+    # inputs were produced upstream (e.g. by the ingest pipeline).
+    seed_demo_data: bool = True
 
     def artifact_prefix(self) -> str:
         return f"jobs/{self.name}"

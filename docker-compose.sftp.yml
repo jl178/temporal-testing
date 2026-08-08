@@ -1,0 +1,15 @@
+# Optional: throwaway SFTP server for testing the file-ingestion pipeline
+# (etl/ingest/). User demo/demo, files under /upload, host port 2222.
+#
+#   nix run .#sftp-up
+#   ./etl/ingest/run.sh
+name: etl-sftp
+
+services:
+  sftp:
+    image: atmoz/sftp:alpine
+    container_name: etl-sftp
+    command: demo:demo:::upload
+    ports:
+      - "2222:22"
+    restart: unless-stopped

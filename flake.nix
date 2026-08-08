@@ -13,6 +13,8 @@
           inherit system;
           config.allowUnfree = true; # dotnet et al.
         };
+        # Native libs required by pip wheels (numpy/pyarrow/pandas) on NixOS.
+        wheelLibPath = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.zlib ];
       in
       rec {
         # Task runner: `nix run .#<name>` from anywhere inside the repo.
@@ -38,6 +40,7 @@
                 text = ''
                   cd "$(git rev-parse --show-toplevel)"
                   export DOTNET_CLI_TELEMETRY_OPTOUT=1
+                  export LD_LIBRARY_PATH="${wheelLibPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
                   ${text}
                 '';
               });
@@ -50,6 +53,8 @@
             prod-down = mkApp "prod-down" ''docker compose -f docker-compose.prod.yml down "$@"'';
             catalog-up = mkApp "catalog-up" ''docker compose -f docker-compose.catalog.yml up -d'';
             catalog-down = mkApp "catalog-down" ''docker compose -f docker-compose.catalog.yml down "$@"'';
+            sftp-up = mkApp "sftp-up" ''docker compose -f docker-compose.sftp.yml up -d'';
+            sftp-down = mkApp "sftp-down" ''docker compose -f docker-compose.sftp.yml down "$@"'';
             examples = mkApp "examples" ''exec scripts/validate-local.sh "$@"'';
             infra-test = mkApp "infra-test" ''
               cd infra
@@ -87,6 +92,7 @@
           shellHook = ''
             export DOTNET_CLI_TELEMETRY_OPTOUT=1
             export DOTNET_ROOT="${pkgs.dotnet-sdk_8}/share/dotnet"
+            export LD_LIBRARY_PATH="${wheelLibPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
             echo "temporal-testing dev shell: node $(node --version), go $(go version | cut -d' ' -f3), python $(python3 --version | cut -d' ' -f2), dotnet $(dotnet --version)"
           '';
         };

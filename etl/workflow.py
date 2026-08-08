@@ -23,11 +23,13 @@ class EtlPipelineWorkflow:
 
     @workflow.run
     async def run(self, job: DbtSparkJob) -> dict:
-        raw_rows = await workflow.execute_activity(
-            seed_raw_data,
-            job,
-            start_to_close_timeout=timedelta(minutes=1),
-        )
+        raw_rows = None
+        if job.seed_demo_data:
+            raw_rows = await workflow.execute_activity(
+                seed_raw_data,
+                job,
+                start_to_close_timeout=timedelta(minutes=1),
+            )
 
         emr = await workflow.execute_activity(
             submit_emr_job,
