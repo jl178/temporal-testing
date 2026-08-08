@@ -1,0 +1,8 @@
+etl:
+  target: dev
+  outputs:
+    dev:
+      type: spark
+      method: session
+      host: localhost
+      schema: analytics

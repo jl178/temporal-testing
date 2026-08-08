@@ -27,6 +27,27 @@ nix run .#examples    # run all 4 language examples e2e (starts the cluster if n
 nix run .#down        # stop everything
 ```
 
+## Prod-mimicking topology
+
+`docker-compose.yml` is the all-in-one dev stack (`auto-setup` runs all four Temporal services in one container). `docker-compose.prod.yml` mimics how production actually looks:
+
+- **history / matching / frontend ×2 / worker** each in their own container (`temporalio/server`, with `auto-setup` doing one-time schema setup on the history node)
+- **nginx** load-balancing gRPC across the two frontends on :7233 (the role an NLB plays in AWS)
+- **Elasticsearch** advanced visibility alongside Postgres persistence
+- **Prometheus** (:9090) scraping every service + **Grafana** (:8085, anonymous admin)
+- a **long-lived containerized app worker** (`examples/python` image) polling `greeting-tasks-python` — the prod pattern where workers are deployed services, not hand-started processes
+
+```sh
+nix run .#down && nix run .#prod-up   # ports 7233/8080 overlap with the dev stack
+cd examples/python && ./.venv/bin/python starter.py   # no local worker needed —
+                                                      # the containerized worker picks it up
+nix run .#prod-down
+```
+
+Versions are pinned to the newest images with a full set available: server/auto-setup **1.29.1** (auto-setup lags server releases; 1.31.x has no auto-setup image yet) and UI **2.53.1**.
+
+**Auth:** both compose files run unauthenticated (normal for local dev). For OAuth/OIDC later: the server takes a JWT authorizer + claim mapper pointed at your IdP's JWKS (`TEMPORAL_AUTH_AUTHORIZER=default`, `TEMPORAL_JWT_KEY_SOURCE1=...`), and the UI has built-in OIDC login (`TEMPORAL_AUTH_ENABLED`, `TEMPORAL_AUTH_PROVIDER_URL`, client id/secret). Commented stubs for both are in `docker-compose.prod.yml`; on AWS the same env vars go on the ECS task definitions with Cognito/Okta/Auth0 as the IdP.
+
 Each example's `run.sh` is self-contained: installs dependencies, starts a worker, executes a workflow on its own task queue, and asserts the result (`Hello, Temporal!`). Individual runs:
 
 ```sh
@@ -94,12 +115,30 @@ nix run .#validate-emulator               # synth + deploy both stacks + report
 
 The script deploys the synthesized templates with the plain CloudFormation API (no `cdk bootstrap` — emulator CFN engines mishandle the toolkit stack; the bootstrap-version SSM parameter is seeded directly). Real *runtime* validation is the Docker Compose path above — the emulators only prove out the infrastructure templates.
 
+## Batch ETL pipeline (Temporal + EMR Serverless + dbt-Spark)
+
+`etl/` is a Temporal-orchestrated batch ETL pipeline:
+
+1. **Extract** — activity seeds raw orders CSV into S3 (emulated).
+2. **Submit** — activity uploads the Spark entry point to S3, creates/starts an EMR Serverless application, starts a job run, and polls it to a terminal state (with activity heartbeats).
+3. **Transform** — activity runs `spark_job.py` — the *same script the EMR job points at* — locally: real Spark (`local[2]`) loads the raw CSV into a `raw.orders` table, then **dbt** (`dbt-spark`, `session` method, attaching to the same SparkSession) builds `stg_orders` → `daily_revenue`, and the mart is uploaded back to S3.
+4. **Validate** — activity reads the mart from S3 and checks its contents; the starter asserts row counts and totals.
+
+```sh
+pip install localemu && localemu start    # emulator on :4566 (S3 + EMR Serverless)
+nix run .#up                              # Temporal cluster
+./etl/run.sh                              # worker + workflow; prints ETL PIPELINE: PASS
+```
+
+Honest scoping: FOSS emulators only implement the EMR Serverless **control plane** — job runs transition to `SUCCESS` but execute nothing — so the pipeline exercises the real submit/poll orchestration against the emulator while the identical transformation runs as local Spark compute. Pointed at real AWS (unset `AWS_ENDPOINT_URL`, real role ARN), the same submission path actually executes `spark_job.py` on EMR Serverless.
+
 ## Repository layout
 
 ```
 docker-compose.yml     # postgres:16 + temporalio/auto-setup + temporalio/ui + admin-tools
 dynamicconfig/         # Temporal dynamic config mounted into the server
 examples/{python,go,typescript,csharp}/
+etl/                   # Temporal-orchestrated batch ETL: EMR Serverless + dbt-Spark
 infra/                 # CDK v2 app (TypeScript) + jest assertion tests
 scripts/               # validate-local.sh, validate-emulator.sh
 flake.nix              # dev shell + task-runner apps (nix run .#<up|down|examples|infra-test|synth|validate-emulator|validate>)

@@ -11,8 +11,8 @@ import {
 import { Construct } from 'constructs';
 import { TemporalDatabase } from './temporal-database';
 
-const DEFAULT_SERVER_IMAGE = 'temporalio/auto-setup:1.27.2';
-const DEFAULT_UI_IMAGE = 'temporalio/ui:2.36.0';
+const DEFAULT_SERVER_IMAGE = 'temporalio/auto-setup:1.29.1';
+const DEFAULT_UI_IMAGE = 'temporalio/ui:2.53.1';
 const GRPC_PORT = 7233;
 const UI_PORT = 8080;
 
@@ -21,9 +21,9 @@ export interface TemporalClusterProps {
   /** Existing ECS cluster to deploy into. When omitted, one is created. */
   readonly ecsCluster?: ecs.ICluster;
   readonly database: TemporalDatabase;
-  /** @default temporalio/auto-setup:1.27.2 */
+  /** @default temporalio/auto-setup:1.29.1 */
   readonly serverImage?: string;
-  /** @default temporalio/ui:2.36.0 */
+  /** @default temporalio/ui:2.53.1 */
   readonly uiImage?: string;
   /** @default 1024 */
   readonly serverCpu?: number;

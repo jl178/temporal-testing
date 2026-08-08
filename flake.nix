@@ -28,6 +28,7 @@
               temporal-cli
               jq
               git
+              jdk17_headless # pyspark (dbt-spark) needs a JVM
             ];
             mkApp = name: text: {
               type = "app";
@@ -45,6 +46,8 @@
           {
             up = mkApp "up" ''docker compose up -d'';
             down = mkApp "down" ''docker compose down "$@"'';
+            prod-up = mkApp "prod-up" ''docker compose -f docker-compose.prod.yml up -d --build'';
+            prod-down = mkApp "prod-down" ''docker compose -f docker-compose.prod.yml down "$@"'';
             examples = mkApp "examples" ''exec scripts/validate-local.sh "$@"'';
             infra-test = mkApp "infra-test" ''
               cd infra
@@ -76,6 +79,7 @@
             awscli2
             temporal-cli
             jq
+            jdk17_headless # pyspark (dbt-spark) needs a JVM
           ];
 
           shellHook = ''

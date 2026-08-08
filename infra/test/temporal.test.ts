@@ -46,7 +46,7 @@ describe('create-everything mode', () => {
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
       ContainerDefinitions: Match.arrayWith([
         Match.objectLike({
-          Image: 'temporalio/auto-setup:1.27.2',
+          Image: 'temporalio/auto-setup:1.29.1',
           Environment: Match.arrayWith([
             { Name: 'DB', Value: 'postgres12' },
             { Name: 'DB_PORT', Value: '5432' },
@@ -60,7 +60,7 @@ describe('create-everything mode', () => {
     });
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
       ContainerDefinitions: Match.arrayWith([
-        Match.objectLike({ Image: 'temporalio/ui:2.36.0' }),
+        Match.objectLike({ Image: 'temporalio/ui:2.53.1' }),
       ]),
     });
   });

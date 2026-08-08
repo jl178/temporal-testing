@@ -1,0 +1,7 @@
+name: etl
+version: "1.0.0"
+profile: etl
+model-paths: ["models"]
+models:
+  etl:
+    +materialized: table

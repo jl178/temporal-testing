@@ -1,0 +1,211 @@
+# Production-mimicking Temporal topology (vs the all-in-one docker-compose.yml):
+#   - each Temporal service (history, matching, frontend x2, worker) in its own container
+#   - nginx load-balancing gRPC across two frontends (what an NLB does in prod)
+#   - Elasticsearch advanced visibility alongside Postgres persistence
+#   - Prometheus scraping every service (http://localhost:9090) + Grafana (http://localhost:8085)
+#   - a long-lived containerized app worker polling its task queue
+#
+# Run with the dev stack down (ports 7233/8080 overlap):
+#   nix run .#down && nix run .#prod-up
+name: temporal-prod
+
+x-temporal-env: &temporal-env
+  DB: postgres12
+  DB_PORT: "5432"
+  POSTGRES_USER: temporal
+  POSTGRES_PWD: temporal
+  POSTGRES_SEEDS: postgresql
+  DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+  ENABLE_ES: "true"
+  ES_SEEDS: elasticsearch
+  ES_VERSION: v7
+  PROMETHEUS_ENDPOINT: 0.0.0.0:8000
+  TEMPORAL_ADDRESS: temporal-nginx:7233
+  TEMPORAL_CLI_ADDRESS: temporal-nginx:7233
+  # --- OAuth/OIDC (server side): uncomment and point at your IdP's JWKS to
+  # require bearer tokens on every gRPC call. SDK clients then send
+  # `Authorization: Bearer <jwt>` headers.
+  # TEMPORAL_AUTH_AUTHORIZER: default
+  # TEMPORAL_AUTH_CLAIM_MAPPER: default
+  # TEMPORAL_JWT_KEY_SOURCE1: https://your-idp.example.com/.well-known/jwks.json
+  # TEMPORAL_JWT_PERMISSIONS_CLAIM: permissions
+
+x-temporal-service: &temporal-service
+  image: temporalio/server:1.29.1
+  restart: on-failure
+  volumes:
+    - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+  networks: [temporal-prod]
+
+services:
+  postgresql:
+    image: postgres:16-alpine
+    container_name: temporal-postgresql
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - pgdata-prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [temporal-prod]
+
+  elasticsearch:
+    image: elasticsearch:7.17.27
+    container_name: temporal-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=false
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [temporal-prod]
+
+  # auto-setup image: creates/migrates the SQL schemas and the ES index
+  # template on first boot, then runs only the history service.
+  temporal-history:
+    <<: *temporal-service
+    image: temporalio/auto-setup:1.29.1
+    container_name: temporal-history
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      <<: *temporal-env
+      SERVICES: history
+
+  temporal-matching:
+    <<: *temporal-service
+    container_name: temporal-matching
+    depends_on:
+      - temporal-history
+    environment:
+      <<: *temporal-env
+      SERVICES: matching
+
+  temporal-frontend:
+    <<: *temporal-service
+    container_name: temporal-frontend
+    depends_on:
+      - temporal-matching
+    environment:
+      <<: *temporal-env
+      SERVICES: frontend
+
+  temporal-frontend2:
+    <<: *temporal-service
+    container_name: temporal-frontend2
+    depends_on:
+      - temporal-matching
+    environment:
+      <<: *temporal-env
+      SERVICES: frontend
+
+  temporal-worker:
+    <<: *temporal-service
+    container_name: temporal-worker
+    depends_on:
+      - temporal-nginx
+    environment:
+      <<: *temporal-env
+      SERVICES: worker
+      PUBLIC_FRONTEND_ADDRESS: temporal-nginx:7233
+
+  temporal-nginx:
+    image: nginx:1.27-alpine
+    container_name: temporal-nginx
+    depends_on:
+      - temporal-frontend
+      - temporal-frontend2
+    ports:
+      - "7233:7233"
+    volumes:
+      - ./deployment/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+    networks: [temporal-prod]
+
+  temporal-admin-tools:
+    image: temporalio/admin-tools:1.29.1-tctl-1.18.4-cli-1.5.0
+    container_name: temporal-admin-tools
+    depends_on:
+      - temporal-nginx
+    environment:
+      TEMPORAL_ADDRESS: temporal-nginx:7233
+      TEMPORAL_CLI_ADDRESS: temporal-nginx:7233
+    stdin_open: true
+    tty: true
+    networks: [temporal-prod]
+
+  temporal-ui:
+    image: temporalio/ui:2.53.1
+    container_name: temporal-ui
+    depends_on:
+      - temporal-nginx
+    environment:
+      TEMPORAL_ADDRESS: temporal-nginx:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+      # --- OAuth/OIDC (UI side): uncomment to put SSO login on the web UI.
+      # TEMPORAL_AUTH_ENABLED: "true"
+      # TEMPORAL_AUTH_PROVIDER_URL: https://your-idp.example.com
+      # TEMPORAL_AUTH_CLIENT_ID: temporal-ui
+      # TEMPORAL_AUTH_CLIENT_SECRET: <secret>
+      # TEMPORAL_AUTH_CALLBACK_URL: http://localhost:8080/auth/sso/callback
+      # TEMPORAL_AUTH_SCOPES: openid,profile,email
+    ports:
+      - "8080:8080"
+    networks: [temporal-prod]
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: temporal-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployment/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - temporal-worker
+    networks: [temporal-prod]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: temporal-grafana
+    environment:
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    ports:
+      - "8085:3000"
+    volumes:
+      - ./deployment/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks: [temporal-prod]
+
+  # Long-lived application worker (the prod pattern: workers are services,
+  # not processes you start by hand). Polls greeting-tasks-python.
+  worker-python:
+    build:
+      context: ./examples/python
+    container_name: temporal-app-worker-python
+    depends_on:
+      - temporal-nginx
+    environment:
+      TEMPORAL_ADDRESS: temporal-nginx:7233
+    restart: unless-stopped
+    networks: [temporal-prod]
+
+networks:
+  temporal-prod:
+    name: temporal-prod
+
+volumes:
+  pgdata-prod:

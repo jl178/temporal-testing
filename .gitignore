@@ -15,6 +15,11 @@ __pycache__/
 # Go
 examples/go/bin/
 
+# ETL work dir (spark warehouse, derby metastore, dbt artifacts)
+etl/.work/
+etl/dbt/logs/
+etl/dbt/target/
+
 # .NET
 bin/
 obj/
