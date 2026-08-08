@@ -200,6 +200,20 @@ ICEBERG_REST_URI=http://localhost:8181 ./etl/ingest/run.sh
 
 Without a catalog the same batch still runs (3 parallel transforms + 1 quarantine); the consolidation step is skipped because cross-job tables don't outlive their jobs.
 
+### Following a batch in the UI
+
+The workflow list is a query engine, not a tree — the production practice is to navigate with filters, not scroll. Every pipeline workflow is stamped with **custom search attributes** (`BatchId`, `Route`, `SourceFile` — registered idempotently by `run.sh` and the prod `temporal-namespace-setup` container), so in the UI search box (or `temporal workflow list --query`):
+
+```
+WorkflowType = "FileIngestWorkflow"        -- one row per batch (your landing view)
+BatchId = "file-ingest-<id>"               -- one batch's entire tree
+Route = "payments"                          -- one route across all batches
+SourceFile = "orders_2026-08.csv"           -- everything spawned by a file
+RootWorkflowId = "file-ingest-<id>"        -- built-in equivalent of BatchId
+```
+
+From any workflow's detail page, the **Relationships** tab shows its parent and children (clickable both ways), and the History tab's **Timeline** view shows the parallel fan-out as overlapping activity lanes. Search-attribute values can also be added as columns on the list page.
+
 The parent and child workflows show up separately in the UI (`file-ingest-*` → `transform-orders-*`), which is the lineage story: per-file, per-route history, independently retryable.
 
 ## Repository layout

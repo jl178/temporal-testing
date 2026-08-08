@@ -4,9 +4,10 @@ import os
 import uuid
 
 from temporalio.client import Client
+from temporalio.common import SearchAttributePair, TypedSearchAttributes
 
 from ingest.activities import IngestConfig
-from ingest.workflow import TASK_QUEUE, FileIngestWorkflow
+from ingest.workflow import BATCH_ID, TASK_QUEUE, FileIngestWorkflow
 
 
 async def main() -> None:
@@ -27,11 +28,15 @@ async def main() -> None:
         # Cross-route join needs the per-route tables to persist across jobs.
         consolidation_spec="consolidation" if catalog else None,
     )
+    workflow_id = f"file-ingest-{uuid.uuid4()}"
     result = await client.execute_workflow(
         FileIngestWorkflow.run,
         cfg,
-        id=f"file-ingest-{uuid.uuid4()}",
+        id=workflow_id,
         task_queue=TASK_QUEUE,
+        search_attributes=TypedSearchAttributes(
+            [SearchAttributePair(BATCH_ID, workflow_id)]
+        ),
     )
     print("Workflow result:")
     print(json.dumps(result, indent=2))

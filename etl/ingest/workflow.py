@@ -2,7 +2,21 @@ import asyncio
 from datetime import timedelta
 
 from temporalio import workflow
+from temporalio.common import (
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+)
 from temporalio.exceptions import ActivityError
+
+# Custom search attributes (registered by run.sh / the prod namespace-setup
+# container). These make the UI list queryable by business dimensions:
+#   BatchId = "<parent workflow id>"   -> one batch's whole tree
+#   Route = "payments"                 -> one route across all batches
+#   SourceFile STARTS_WITH "orders"    -> lineage for a file
+BATCH_ID = SearchAttributeKey.for_keyword("BatchId")
+ROUTE = SearchAttributeKey.for_keyword("Route")
+SOURCE_FILE = SearchAttributeKey.for_keyword("SourceFile")
 
 with workflow.unsafe.imports_passed_through():
     from activities import DbtSparkJob
@@ -57,6 +71,12 @@ class FileIngestWorkflow:
                 DbtSparkJob(**job_kwargs),
                 id=f"consolidate-{cfg.consolidation_spec}-{workflow.info().workflow_id}",
                 task_queue="etl-pipeline",
+                search_attributes=TypedSearchAttributes(
+                    [
+                        SearchAttributePair(BATCH_ID, workflow.info().workflow_id),
+                        SearchAttributePair(ROUTE, "consolidation"),
+                    ]
+                ),
             )
 
         return {
@@ -101,6 +121,13 @@ class FileIngestWorkflow:
             DbtSparkJob(**job_kwargs),
             id=f"transform-{route}-{filename}",
             task_queue="etl-pipeline",
+            search_attributes=TypedSearchAttributes(
+                [
+                    SearchAttributePair(BATCH_ID, workflow.info().workflow_id),
+                    SearchAttributePair(ROUTE, route),
+                    SearchAttributePair(SOURCE_FILE, filename),
+                ]
+            ),
         )
 
         return {

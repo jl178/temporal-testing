@@ -17,6 +17,12 @@ if ! curl -s -o /dev/null --max-time 5 "$AWS_ENDPOINT_URL"; then
   echo "ERROR: no AWS emulator at $AWS_ENDPOINT_URL (pip install localemu && localemu start)" >&2
   exit 1
 fi
+# Custom search attributes used by the pipeline (idempotent).
+for attr in BatchId Route SourceFile; do
+  temporal operator search-attribute create --name "$attr" --type Keyword \
+    --address "${TEMPORAL_ADDRESS:-localhost:7233}" >/dev/null 2>&1 || true
+done
+
 # SFTP test server is part of the dev compose config; start it if needed.
 if ! docker ps --format '{{.Names}}' | grep -q '^etl-sftp$'; then
   (cd .. && docker compose up -d sftp)
