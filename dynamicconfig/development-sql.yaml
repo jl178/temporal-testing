@@ -1,6 +1,13 @@
 limit.maxIDLength:
   - value: 255
     constraints: {}
+# Worker heartbeats + the UI "Workers" page (off by default in 1.29)
+frontend.WorkerHeartbeatsEnabled:
+  - value: true
+    constraints: {}
+frontend.ListWorkersEnabled:
+  - value: true
+    constraints: {}
 system.forceSearchAttributesCacheRefreshOnRead:
   - value: true # dev-only; forces refresh so recently-added search attributes are visible immediately
     constraints: {}

@@ -1,0 +1,34 @@
+# Dex: free, local, no-signup OIDC provider for testing SSO on the Temporal UI.
+# Static test user: admin@example.com / password
+#
+# The issuer is localhost:5556 because both the browser (login redirect) and
+# the UI backend (discovery + token exchange) must reach it at the same URL —
+# hence the temporal-ui container runs with host networking.
+#
+# To use real GitHub identities later, add a `connectors:` entry of type
+# `github` (GitHub itself is OAuth2-only, not OIDC — Dex is the bridge).
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: temporal-ui
+    name: Temporal UI
+    secret: temporal-ui-secret
+    redirectURIs:
+      - http://localhost:8080/auth/sso/callback
+
+enablePasswordDB: true
+staticPasswords:
+  - email: admin@example.com
+    # bcrypt of "password"
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: admin
+    userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"

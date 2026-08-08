@@ -164,24 +164,40 @@ services:
     tty: true
     networks: [temporal-prod]
 
+  # Free local OIDC provider (no signup): static user admin@example.com/password.
+  # GitHub can't be an OIDC provider directly (OAuth2-only); a Dex `github`
+  # connector bridges it if real GitHub identities are wanted later.
+  dex:
+    image: dexidp/dex:v2.41.1
+    container_name: temporal-dex
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./deployment/dex/config.yaml:/etc/dex/config.yaml:ro
+    restart: unless-stopped
+    networks: [temporal-prod]
+
+  # Host networking so the OIDC issuer (http://localhost:5556/dex) resolves
+  # identically for the browser (login redirect) and the UI backend
+  # (discovery + code exchange) — go-oidc requires the issuer to match.
   temporal-ui:
     image: temporalio/ui:2.53.1
     container_name: temporal-ui
+    network_mode: host
     depends_on:
       - temporal-nginx
+      - dex
     environment:
-      TEMPORAL_ADDRESS: temporal-nginx:7233
+      TEMPORAL_ADDRESS: localhost:7233
+      TEMPORAL_UI_PORT: "8080"
       TEMPORAL_CORS_ORIGINS: http://localhost:3000
-      # --- OAuth/OIDC (UI side): uncomment to put SSO login on the web UI.
-      # TEMPORAL_AUTH_ENABLED: "true"
-      # TEMPORAL_AUTH_PROVIDER_URL: https://your-idp.example.com
-      # TEMPORAL_AUTH_CLIENT_ID: temporal-ui
-      # TEMPORAL_AUTH_CLIENT_SECRET: <secret>
-      # TEMPORAL_AUTH_CALLBACK_URL: http://localhost:8080/auth/sso/callback
-      # TEMPORAL_AUTH_SCOPES: openid,profile,email
-    ports:
-      - "8080:8080"
-    networks: [temporal-prod]
+      TEMPORAL_AUTH_ENABLED: "true"
+      TEMPORAL_AUTH_PROVIDER_URL: http://localhost:5556/dex
+      TEMPORAL_AUTH_CLIENT_ID: temporal-ui
+      TEMPORAL_AUTH_CLIENT_SECRET: temporal-ui-secret
+      TEMPORAL_AUTH_CALLBACK_URL: http://localhost:8080/auth/sso/callback
+      TEMPORAL_AUTH_SCOPES: openid,profile,email
 
   prometheus:
     image: prom/prometheus:v2.53.0
