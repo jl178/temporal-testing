@@ -14,7 +14,59 @@
           config.allowUnfree = true; # dotnet et al.
         };
       in
-      {
+      rec {
+        # Task runner: `nix run .#<name>` from anywhere inside the repo.
+        # Apps operate on the working tree (git toplevel), not the store copy.
+        apps =
+          let
+            toolchain = with pkgs; [
+              nodejs_20
+              go
+              python312
+              dotnet-sdk_8
+              awscli2
+              temporal-cli
+              jq
+              git
+            ];
+            mkApp = name: text: {
+              type = "app";
+              program = pkgs.lib.getExe (pkgs.writeShellApplication {
+                inherit name;
+                runtimeInputs = toolchain;
+                text = ''
+                  cd "$(git rev-parse --show-toplevel)"
+                  export DOTNET_CLI_TELEMETRY_OPTOUT=1
+                  ${text}
+                '';
+              });
+            };
+          in
+          {
+            up = mkApp "up" ''docker compose up -d'';
+            down = mkApp "down" ''docker compose down "$@"'';
+            examples = mkApp "examples" ''exec scripts/validate-local.sh "$@"'';
+            infra-test = mkApp "infra-test" ''
+              cd infra
+              [ -d node_modules ] || npm install --no-fund --no-audit --loglevel=error
+              exec npx jest "$@"
+            '';
+            synth = mkApp "synth" ''
+              cd infra
+              [ -d node_modules ] || npm install --no-fund --no-audit --loglevel=error
+              CDK_DEFAULT_ACCOUNT="''${CDK_DEFAULT_ACCOUNT:-111111111111}" \
+                CDK_DEFAULT_REGION="''${CDK_DEFAULT_REGION:-us-east-1}" \
+                exec npx cdk synth "$@"
+            '';
+            validate-emulator = mkApp "validate-emulator" ''exec scripts/validate-emulator.sh "$@"'';
+            validate = mkApp "validate" ''
+              scripts/validate-local.sh
+              cd infra
+              [ -d node_modules ] || npm install --no-fund --no-audit --loglevel=error
+              npx jest
+            '';
+          };
+
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             nodejs_20
