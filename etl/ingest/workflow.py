@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from temporalio import workflow
+from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
     from activities import DbtSparkJob
@@ -43,11 +44,19 @@ class FileIngestWorkflow:
                 start_to_close_timeout=timedelta(minutes=10),
                 heartbeat_timeout=timedelta(minutes=1),
             )
-            parsed = await workflow.execute_activity(
-                parse_file,
-                args=[cfg, landed_key],
-                start_to_close_timeout=timedelta(minutes=5),
-            )
+            try:
+                parsed = await workflow.execute_activity(
+                    parse_file,
+                    args=[cfg, landed_key],
+                    start_to_close_timeout=timedelta(minutes=5),
+                )
+            except ActivityError as err:
+                # Structurally broken file: it was quarantined by the
+                # activity; record it and keep processing the batch.
+                processed.append(
+                    {"file": filename, "status": "quarantined", "error": str(err.cause)}
+                )
+                continue
             route = await workflow.execute_activity(
                 classify_file,
                 args=[cfg, parsed["staged_key"]],
@@ -69,6 +78,7 @@ class FileIngestWorkflow:
             processed.append(
                 {
                     "file": filename,
+                    "status": "transformed",
                     "landed_key": landed_key,
                     "staged": parsed,
                     "route": route,

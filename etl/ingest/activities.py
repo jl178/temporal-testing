@@ -1,13 +1,21 @@
 """Activities for the file-ingestion pipeline.
 
-SFTP -> s3://<bucket>/landing/ -> rules-based parse -> s3://<bucket>/staged/
+SFTP -> s3://<bucket>/landing/ -> hygiene-only parse -> s3://<bucket>/staged/
 -> classify (routing field) -> resolve a transform spec from the registry.
 The resolved spec becomes a DbtSparkJob executed as a child workflow
 (EtlPipelineWorkflow) which writes curated output back to S3.
+
+Division of labor: the parse step here is FILE HYGIENE ONLY — it turns bytes
+into a loadable table (permissive all-strings read, mechanical header
+sanitization, quarantine when a file is structurally broken). Everything
+semantic — renames beyond sanitization, casts, trims, dedupes, filters —
+belongs in the route's dbt staging models, where it is versioned, tested,
+and documented (see etl/dbt/models/staging/).
 """
 import fnmatch
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 
@@ -15,18 +23,10 @@ import asyncssh
 import boto3
 import pandas as pd
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPECS_DIR = os.path.join(os.path.dirname(HERE), "specs")
-
-# Demo parse rules: normalize the messy vendor headers into the schema the
-# dbt project expects. Each rule is applied in order by apply_rules().
-DEFAULT_PARSE_RULES = [
-    {"op": "lowercase_headers"},
-    {"op": "rename", "mapping": {"order id": "order_id", "order date": "order_date"}},
-    {"op": "cast", "column": "amount", "type": "float"},
-    {"op": "strip", "column": "status"},
-]
 
 
 def _s3():
@@ -49,7 +49,7 @@ class IngestConfig:
     bucket: str = "etl-data"
     landing_prefix: str = "landing"
     staged_prefix: str = "staged"
-    parse_rules: list = field(default_factory=lambda: list(DEFAULT_PARSE_RULES))
+    quarantine_prefix: str = "quarantine"
     # Column whose value selects the downstream transform spec.
     routing_field: str = "record_type"
     # Passed through to the spawned DbtSparkJob (None = ephemeral catalog).
@@ -96,49 +96,38 @@ async def land_sftp_file(cfg: IngestConfig, filename: str) -> str:
     return key
 
 
-def apply_rules(df: pd.DataFrame, rules: list, context: dict) -> pd.DataFrame:
-    """Tiny declarative parse engine. `{{ name }}` macros in constant values
-    are substituted from context (file_name, landed_key)."""
-
-    def render(value: str) -> str:
-        for k, v in context.items():
-            value = value.replace("{{ " + k + " }}", str(v))
-        return value
-
-    for rule in rules:
-        op = rule["op"]
-        if op == "lowercase_headers":
-            df.columns = [c.strip().lower() for c in df.columns]
-        elif op == "rename":
-            df = df.rename(columns=rule["mapping"])
-        elif op == "cast":
-            df[rule["column"]] = df[rule["column"]].astype(rule["type"])
-        elif op == "strip":
-            df[rule["column"]] = df[rule["column"]].astype(str).str.strip()
-        elif op == "drop":
-            df = df.drop(columns=rule["columns"])
-        elif op == "constant":
-            df[rule["column"]] = render(str(rule["value"]))
-        else:
-            raise ValueError(f"unknown parse rule op: {op}")
-    return df
+def sanitize_header(name: str) -> str:
+    """Mechanical, config-free header cleanup so columns are SQL-addressable:
+    'Order ID' -> 'order_id'. Carries no business meaning — semantic renames
+    belong in dbt staging models."""
+    return re.sub(r"[^0-9a-zA-Z]+", "_", name.strip().lower()).strip("_")
 
 
 @activity.defn
 async def parse_file(cfg: IngestConfig, landed_key: str) -> dict:
-    """Generic parse: apply the config's rules to a landed CSV and write
-    normalized parquet to the staged zone."""
+    """File hygiene: permissive read (every column as string — typing is
+    semantic and belongs in dbt), sanitize headers, write parquet to the
+    staged zone. Structurally broken files go to quarantine/ and fail the
+    file non-retryably instead of retrying forever."""
     s3 = _s3()
     filename = os.path.basename(landed_key)
     with tempfile.TemporaryDirectory() as tmp:
         local = os.path.join(tmp, filename)
         s3.download_file(cfg.bucket, landed_key, local)
-        df = pd.read_csv(local)
-        df = apply_rules(df, cfg.parse_rules, {"file_name": filename, "landed_key": landed_key})
-        staged_key = f"{cfg.staged_prefix}/{os.path.splitext(filename)[0]}.parquet"
-        out = os.path.join(tmp, "staged.parquet")
-        df.to_parquet(out, index=False)
-        s3.upload_file(out, cfg.bucket, staged_key)
+        try:
+            df = pd.read_csv(local, dtype=str)
+            df.columns = [sanitize_header(c) for c in df.columns]
+            staged_key = f"{cfg.staged_prefix}/{os.path.splitext(filename)[0]}.parquet"
+            out = os.path.join(tmp, "staged.parquet")
+            df.to_parquet(out, index=False)
+            s3.upload_file(out, cfg.bucket, staged_key)
+        except (pd.errors.ParserError, UnicodeDecodeError, ValueError) as exc:
+            quarantine_key = f"{cfg.quarantine_prefix}/{filename}"
+            s3.upload_file(local, cfg.bucket, quarantine_key)
+            raise ApplicationError(
+                f"{filename} failed structural parse; quarantined at {quarantine_key}: {exc}",
+                non_retryable=True,
+            )
     return {"staged_key": staged_key, "rows": len(df), "columns": list(df.columns)}
 
 
@@ -159,7 +148,8 @@ async def classify_file(cfg: IngestConfig, staged_key: str) -> str:
 @activity.defn
 async def resolve_transform_spec(cfg: IngestConfig, route: str, staged_key: str) -> dict:
     """Registry lookup: route value -> transform spec file -> DbtSparkJob
-    kwargs with the staged file wired in as the input."""
+    kwargs with the staged file wired in as the input. The route's dbt
+    project (its staging models) holds that route's semantic parse rules."""
     with open(os.path.join(SPECS_DIR, "registry.json")) as f:
         registry = json.load(f)
     if route not in registry:

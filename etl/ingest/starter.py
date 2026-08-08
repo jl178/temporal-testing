@@ -33,6 +33,7 @@ async def main() -> None:
 
     assert result["files_processed"] >= 1, result
     first = result["results"][0]
+    assert first["status"] == "transformed", first
     assert first["route"] == "orders", first
     mart = first["transform"]["transform"]["outputs"][0]
     assert mart["rows"] == 3, mart
