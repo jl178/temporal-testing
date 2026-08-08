@@ -9,6 +9,7 @@ from ingest.activities import (
     discover_sftp_files,
     land_sftp_file,
     parse_file,
+    resolve_consolidation_spec,
     resolve_transform_spec,
 )
 from ingest.workflow import TASK_QUEUE, FileIngestWorkflow
@@ -29,6 +30,7 @@ async def main() -> None:
             parse_file,
             classify_file,
             resolve_transform_spec,
+            resolve_consolidation_spec,
         ],
     )
     print(f"Ingest worker listening on task queue {TASK_QUEUE!r}", flush=True)

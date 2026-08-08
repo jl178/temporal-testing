@@ -1,3 +1,5 @@
+{{ config(tags=['orders']) }}
+
 select
     order_date,
     count(*) as order_count,

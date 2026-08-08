@@ -191,7 +191,9 @@ async def submit_emr_job(job: DbtSparkJob) -> dict:
 @activity.defn
 async def run_local_transform(job: DbtSparkJob) -> dict:
     """Compute step: run the same spec through spark_job.py in this environment."""
-    work_dir = os.path.join(HERE, ".work")
+    # Per-job work dir: parallel jobs must not share scratch space
+    # (spec file, derby metastore, warehouse).
+    work_dir = os.path.join(HERE, ".work", job.name)
     os.makedirs(work_dir, exist_ok=True)
     spec_path = os.path.join(work_dir, "spec.json")
     with open(spec_path, "w") as f:

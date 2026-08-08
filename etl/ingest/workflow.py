@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 from temporalio import workflow
@@ -11,6 +12,7 @@ with workflow.unsafe.imports_passed_through():
         discover_sftp_files,
         land_sftp_file,
         parse_file,
+        resolve_consolidation_spec,
         resolve_transform_spec,
     )
     from workflow import EtlPipelineWorkflow
@@ -20,12 +22,14 @@ TASK_QUEUE = "file-ingest"
 
 @workflow.defn
 class FileIngestWorkflow:
-    """SFTP -> S3 landing -> generic rules-based parse -> S3 staged ->
-    classify on a routing field -> dispatch a per-route transform spec as a
-    child EtlPipelineWorkflow -> S3 curated.
+    """SFTP -> S3 landing -> hygiene parse -> S3 staged -> classify on a
+    routing field -> dispatch a per-route transform spec as a child
+    EtlPipelineWorkflow -> S3 curated.
 
-    Files are processed sequentially for readability; swap the loop for
-    asyncio.gather over per-file child workflows to fan out.
+    Files fan out in parallel; structurally broken files are quarantined
+    without failing the batch. When a consolidation spec is configured (and
+    a persistent catalog makes cross-job tables visible), a final child job
+    joins the per-route outputs.
     """
 
     @workflow.run
@@ -36,54 +40,74 @@ class FileIngestWorkflow:
             start_to_close_timeout=timedelta(minutes=1),
         )
 
-        processed = []
-        for filename in files:
-            landed_key = await workflow.execute_activity(
-                land_sftp_file,
-                args=[cfg, filename],
-                start_to_close_timeout=timedelta(minutes=10),
-                heartbeat_timeout=timedelta(minutes=1),
-            )
-            try:
-                parsed = await workflow.execute_activity(
-                    parse_file,
-                    args=[cfg, landed_key],
-                    start_to_close_timeout=timedelta(minutes=5),
-                )
-            except ActivityError as err:
-                # Structurally broken file: it was quarantined by the
-                # activity; record it and keep processing the batch.
-                processed.append(
-                    {"file": filename, "status": "quarantined", "error": str(err.cause)}
-                )
-                continue
-            route = await workflow.execute_activity(
-                classify_file,
-                args=[cfg, parsed["staged_key"]],
-                start_to_close_timeout=timedelta(minutes=1),
-            )
-            job_kwargs = await workflow.execute_activity(
-                resolve_transform_spec,
-                args=[cfg, route, parsed["staged_key"]],
-                start_to_close_timeout=timedelta(minutes=1),
-            )
+        results = list(
+            await asyncio.gather(*(self._process_file(cfg, f) for f in files))
+        )
 
-            transform = await workflow.execute_child_workflow(
+        transformed = [r for r in results if r["status"] == "transformed"]
+        consolidation = None
+        if cfg.consolidation_spec and transformed:
+            job_kwargs = await workflow.execute_activity(
+                resolve_consolidation_spec,
+                args=[cfg, cfg.consolidation_spec],
+                start_to_close_timeout=timedelta(minutes=1),
+            )
+            consolidation = await workflow.execute_child_workflow(
                 EtlPipelineWorkflow.run,
                 DbtSparkJob(**job_kwargs),
-                id=f"transform-{route}-{filename}",
+                id=f"consolidate-{cfg.consolidation_spec}-{workflow.info().workflow_id}",
                 task_queue="etl-pipeline",
             )
 
-            processed.append(
-                {
-                    "file": filename,
-                    "status": "transformed",
-                    "landed_key": landed_key,
-                    "staged": parsed,
-                    "route": route,
-                    "transform": transform,
-                }
-            )
+        return {
+            "files_processed": len(results),
+            "transformed": len(transformed),
+            "quarantined": sum(1 for r in results if r["status"] == "quarantined"),
+            "results": results,
+            "consolidation": consolidation,
+        }
 
-        return {"files_processed": len(processed), "results": processed}
+    async def _process_file(self, cfg: IngestConfig, filename: str) -> dict:
+        landed_key = await workflow.execute_activity(
+            land_sftp_file,
+            args=[cfg, filename],
+            start_to_close_timeout=timedelta(minutes=10),
+            heartbeat_timeout=timedelta(minutes=1),
+        )
+        try:
+            parsed = await workflow.execute_activity(
+                parse_file,
+                args=[cfg, landed_key],
+                start_to_close_timeout=timedelta(minutes=5),
+            )
+        except ActivityError as err:
+            # Structurally broken file: it was quarantined by the activity;
+            # record it and let the rest of the batch continue.
+            return {"file": filename, "status": "quarantined", "error": str(err.cause)}
+
+        route = await workflow.execute_activity(
+            classify_file,
+            args=[cfg, parsed["staged_key"]],
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+        job_kwargs = await workflow.execute_activity(
+            resolve_transform_spec,
+            args=[cfg, route, parsed["staged_key"]],
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+
+        transform = await workflow.execute_child_workflow(
+            EtlPipelineWorkflow.run,
+            DbtSparkJob(**job_kwargs),
+            id=f"transform-{route}-{filename}",
+            task_queue="etl-pipeline",
+        )
+
+        return {
+            "file": filename,
+            "status": "transformed",
+            "landed_key": landed_key,
+            "staged": parsed,
+            "route": route,
+            "transform": transform,
+        }

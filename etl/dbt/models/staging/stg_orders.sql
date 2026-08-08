@@ -1,5 +1,7 @@
 -- Semantic normalization lives here (not in the ingest parser): the staged
 -- source arrives with sanitized headers but every column still a string.
+{{ config(tags=['orders']) }}
+
 select
     cast(order_id as int) as order_id,
     customer,

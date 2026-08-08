@@ -28,9 +28,11 @@ if [ ! -d .venv ]; then
 fi
 ./.venv/bin/pip install -q -r requirements.txt
 
-# Seed a messy vendor file onto the SFTP server.
-TMP_CSV=$(mktemp --suffix=.csv)
-cat > "$TMP_CSV" <<'EOF'
+# Seed a multi-source vendor batch onto the SFTP server: three routed files
+# (messy headers on purpose) plus one structurally broken file that must end
+# up quarantined without failing the batch.
+TMP_DIR=$(mktemp -d)
+cat > "$TMP_DIR/orders_2026-08.csv" <<'EOF'
 Order ID,Customer,Order Date,Amount,Status,record_type
 1,acme,2026-08-01,120.50,completed,orders
 2,acme,2026-08-01,80.00,completed,orders
@@ -40,8 +42,24 @@ Order ID,Customer,Order Date,Amount,Status,record_type
 6,initech,2026-08-03,12.00,pending,orders
 7,acme,2026-08-03,99.95,completed,orders
 EOF
-docker cp "$TMP_CSV" etl-sftp:/home/demo/upload/orders_2026-08.csv
-rm -f "$TMP_CSV"
+cat > "$TMP_DIR/customers_2026-08.csv" <<'EOF'
+Customer,Segment,Region,record_type
+acme,Enterprise,US,customers
+globex,SMB,EU,customers
+initech,SMB,US,customers
+EOF
+cat > "$TMP_DIR/payments_2026-08.csv" <<'EOF'
+Payment ID,Order ID,Paid Amount,Paid Date,record_type
+901,1,120.50,2026-08-02,payments
+902,2,80.00,2026-08-02,payments
+903,4,310.10,2026-08-03,payments
+904,5,55.99,2026-08-03,payments
+EOF
+head -c 200 /dev/urandom > "$TMP_DIR/zz_broken.csv"
+for f in "$TMP_DIR"/*.csv; do
+  docker cp "$f" "etl-sftp:/home/demo/upload/$(basename "$f")"
+done
+rm -rf "$TMP_DIR"
 
 # Transform worker (child workflows) + ingest worker (parent workflow).
 ./.venv/bin/python worker.py &

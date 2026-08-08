@@ -5,3 +5,5 @@ sources:
     schema: raw
     tables:
       - name: orders
+      - name: customers
+      - name: payments

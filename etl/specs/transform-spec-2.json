@@ -1,0 +1,14 @@
+{
+  "name": "transform-spec-2",
+  "project_dir": "dbt",
+  "dbt_args": ["build", "--select", "tag:customers"],
+  "source_table": "raw.customers",
+  "source_format": "parquet",
+  "outputs": [
+    {
+      "table": "analytics.dim_customers",
+      "key": "curated/dim_customers.json",
+      "format": "json"
+    }
+  ]
+}

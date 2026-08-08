@@ -54,6 +54,10 @@ class IngestConfig:
     routing_field: str = "record_type"
     # Passed through to the spawned DbtSparkJob (None = ephemeral catalog).
     catalog: dict | None = None
+    # Optional spec (etl/specs/<name>.json) run once after the per-file
+    # transforms, to join their outputs. Requires a persistent catalog —
+    # cross-job tables only exist when one is configured.
+    consolidation_spec: str | None = None
 
 
 def _sftp_conn(cfg: SftpSource):
@@ -170,6 +174,25 @@ async def resolve_transform_spec(cfg: IngestConfig, route: str, staged_key: str)
                 "format": spec.get("source_format", "parquet"),
             }
         ],
+        "outputs": spec["outputs"],
+        "catalog": cfg.catalog,
+        "seed_demo_data": False,
+    }
+
+
+@activity.defn
+async def resolve_consolidation_spec(cfg: IngestConfig, spec_name: str) -> dict:
+    """A named spec with no landed input: its dbt models read the tables the
+    per-file transform jobs left in the persistent catalog."""
+    with open(os.path.join(SPECS_DIR, f"{spec_name}.json")) as f:
+        spec = json.load(f)
+    return {
+        "bucket": cfg.bucket,
+        "name": spec["name"],
+        "project_dir": spec.get("project_dir", "dbt"),
+        "dbt_args": spec.get("dbt_args", ["build"]),
+        "dbt_vars": spec.get("dbt_vars", {}),
+        "inputs": [],
         "outputs": spec["outputs"],
         "catalog": cfg.catalog,
         "seed_demo_data": False,

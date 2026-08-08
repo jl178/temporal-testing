@@ -1,3 +1,5 @@
 {
-  "orders": "transform-spec-1"
+  "orders": "transform-spec-1",
+  "customers": "transform-spec-2",
+  "payments": "transform-spec-3"
 }

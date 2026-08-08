@@ -22,24 +22,44 @@ async def main() -> None:
             "uri": os.environ["ICEBERG_REST_URI"],
             "warehouse": "s3://etl-data/warehouse",
         }
+    cfg = IngestConfig(
+        catalog=catalog,
+        # Cross-route join needs the per-route tables to persist across jobs.
+        consolidation_spec="consolidation" if catalog else None,
+    )
     result = await client.execute_workflow(
         FileIngestWorkflow.run,
-        IngestConfig(catalog=catalog),
+        cfg,
         id=f"file-ingest-{uuid.uuid4()}",
         task_queue=TASK_QUEUE,
     )
     print("Workflow result:")
     print(json.dumps(result, indent=2))
 
-    assert result["files_processed"] >= 1, result
-    first = result["results"][0]
-    assert first["status"] == "transformed", first
-    assert first["route"] == "orders", first
-    mart = first["transform"]["transform"]["outputs"][0]
-    assert mart["rows"] == 3, mart
-    data = first["transform"]["validation"]["outputs"][0]["data"]
-    revenue = sum(float(r["total_revenue"]) for r in data)
+    by_route = {
+        r["route"]: r for r in result["results"] if r["status"] == "transformed"
+    }
+
+    assert result["transformed"] == 3, result
+    assert result["quarantined"] == 1, result
+
+    orders_mart = by_route["orders"]["transform"]["validation"]["outputs"][0]
+    assert orders_mart["rows"] == 3, orders_mart
+    revenue = sum(float(r["total_revenue"]) for r in orders_mart["data"])
     assert abs(revenue - 666.54) < 0.01, revenue
+
+    assert by_route["customers"]["transform"]["validation"]["outputs"][0]["rows"] == 3
+    assert by_route["payments"]["transform"]["validation"]["outputs"][0]["rows"] == 4
+
+    if cfg.consolidation_spec:
+        summary = result["consolidation"]["validation"]["outputs"][0]
+        assert summary["rows"] == 2, summary
+        rows = {r["segment"]: r for r in summary["data"]}
+        assert abs(float(rows["enterprise"]["revenue"]) - 300.45) < 0.01, rows
+        assert abs(float(rows["enterprise"]["collected"]) - 200.50) < 0.01, rows
+        assert abs(float(rows["smb"]["collection_rate"]) - 1.0) < 0.001, rows
+        print("CONSOLIDATION: PASS (executive_summary joined 3 routes)")
+
     print("INGEST PIPELINE: PASS")
 
 

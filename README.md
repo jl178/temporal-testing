@@ -175,6 +175,31 @@ SFTP ──▶ s3://etl-data/landing/ ──▶ s3://etl-data/staged/ ──▶ 
 
 The SFTP test server (`atmoz/sftp`, `demo`/`demo` on :2222) is part of the dev compose config — it comes up with `nix run .#up`, is auto-started by `run.sh` if missing, and can be managed alone with `nix run .#sftp-up` / `.#sftp-down`.
 
+### The complex batch
+
+`run.sh` seeds a realistic multi-source batch: three routed files with messy vendor headers (**orders**, **customers**, **payments** — each `record_type` maps to a different spec via the registry, and each spec builds only its dbt models via `--select tag:<route>`) plus one structurally broken file. The parent workflow **fans out in parallel** (`asyncio.gather` over per-file child workflows):
+
+```
+file-ingest-<id>
+├── transform-orders-orders_2026-08.csv        -> analytics.daily_revenue
+├── transform-customers-customers_2026-08.csv  -> analytics.dim_customers
+├── transform-payments-payments_2026-08.csv    -> analytics.fct_payments
+├── zz_broken.csv                              -> quarantine/ (batch continues)
+└── consolidate-consolidation-<id>             -> analytics.executive_summary
+```
+
+The final **consolidation** child job runs after the fan-out completes and joins all three routes' tables (`dbt build --select tag:consolidated`) into `executive_summary` — revenue vs. collected payments per customer segment. This cross-job join is exactly what the persistent catalog is for, so consolidation only runs in catalog mode:
+
+```sh
+nix run .#catalog-up
+ICEBERG_REST_URI=http://localhost:8181 ./etl/ingest/run.sh
+# ...
+# CONSOLIDATION: PASS (executive_summary joined 3 routes)
+# INGEST PIPELINE: PASS
+```
+
+Without a catalog the same batch still runs (3 parallel transforms + 1 quarantine); the consolidation step is skipped because cross-job tables don't outlive their jobs.
+
 The parent and child workflows show up separately in the UI (`file-ingest-*` → `transform-orders-*`), which is the lineage story: per-file, per-route history, independently retryable.
 
 ## Repository layout

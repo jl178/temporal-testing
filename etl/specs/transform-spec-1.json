@@ -1,7 +1,7 @@
 {
   "name": "transform-spec-1",
   "project_dir": "dbt",
-  "dbt_args": ["build"],
+  "dbt_args": ["build", "--select", "tag:orders"],
   "source_table": "raw.orders",
   "source_format": "parquet",
   "outputs": [
