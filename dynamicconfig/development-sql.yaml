@@ -1,0 +1,6 @@
+limit.maxIDLength:
+  - value: 255
+    constraints: {}
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true # dev-only; forces refresh so recently-added search attributes are visible immediately
+    constraints: {}
