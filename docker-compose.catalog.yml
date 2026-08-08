@@ -1,0 +1,29 @@
+# Optional: local Iceberg REST catalog — the Glue Data Catalog stand-in.
+# When the ETL job spec has a `catalog` section, dbt models materialize as
+# Iceberg tables here (persistent, cross-run, queryable by other engines)
+# instead of the default ephemeral in-memory Spark catalog.
+#
+#   nix run .#catalog-up
+#   ICEBERG_REST_URI=http://localhost:8181 ./etl/run.sh
+#
+# Data files land in s3://etl-data/warehouse on the AWS emulator (:4566);
+# on real AWS swap the spec's catalog to {"type": "glue", ...}.
+name: iceberg-catalog
+
+services:
+  iceberg-rest:
+    image: tabulario/iceberg-rest:1.6.0
+    container_name: iceberg-rest-catalog
+    # Host networking: the catalog must reach the AWS emulator on
+    # localhost:4566 (bridged containers can't cross a host firewall);
+    # it serves on :8181.
+    network_mode: host
+    environment:
+      CATALOG_WAREHOUSE: s3://etl-data/warehouse
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://localhost:4566
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+    restart: unless-stopped

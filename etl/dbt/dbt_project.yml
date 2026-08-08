@@ -5,3 +5,5 @@ model-paths: ["models"]
 models:
   etl:
     +materialized: table
+    # "iceberg" when the job spec has a catalog, else plain parquet tables
+    +file_format: "{{ env_var('DBT_FILE_FORMAT', 'parquet') }}"

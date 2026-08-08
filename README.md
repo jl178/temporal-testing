@@ -124,17 +124,28 @@ The script deploys the synthesized templates with the plain CloudFormation API (
 
 ## Batch ETL pipeline (Temporal + EMR Serverless + dbt-Spark)
 
-`etl/` is a Temporal-orchestrated batch ETL pipeline:
+`etl/` is a Temporal-orchestrated, **generic** dbt-Spark pipeline. A `DbtSparkJob` spec describes any workload — S3 inputs to land as Spark tables, a dbt project + CLI args/vars, outputs to export — and `spark_job.py` is a generic runner that executes any such spec (the orders → `daily_revenue` demo is just the default instance). The workflow:
 
-1. **Extract** — activity seeds raw orders CSV into S3 (emulated).
-2. **Submit** — activity uploads the Spark entry point to S3, creates/starts an EMR Serverless application, starts a job run, and polls it to a terminal state (with activity heartbeats).
-3. **Transform** — activity runs `spark_job.py` — the *same script the EMR job points at* — locally: real Spark (`local[2]`) loads the raw CSV into a `raw.orders` table, then **dbt** (`dbt-spark`, `session` method, attaching to the same SparkSession) builds `stg_orders` → `daily_revenue`, and the mart is uploaded back to S3.
-4. **Validate** — activity reads the mart from S3 and checks its contents; the starter asserts row counts and totals.
+1. **Extract** — activity seeds raw orders CSV into S3 (demo step; real sources land their own).
+2. **Submit** — activity packages the runner + dbt project tarball + spec to S3, creates/starts an EMR Serverless application, starts a job run pointing at them, and polls to a terminal state (with activity heartbeats).
+3. **Transform** — activity runs the *identical spec* through `spark_job.py` locally: real Spark, **dbt** (`dbt-spark` `session` method) building `stg_orders` → `daily_revenue`, outputs exported to S3.
+4. **Validate** — activity checks every declared output landed and is non-empty; the starter asserts row counts and totals.
 
 ```sh
 pip install localemu && localemu start    # emulator on :4566 (S3 + EMR Serverless)
 nix run .#up                              # Temporal cluster
 ./etl/run.sh                              # worker + workflow; prints ETL PIPELINE: PASS
+```
+
+**Table metadata / catalog** — the spec's optional `catalog` section picks between two modes:
+
+- *Default (no catalog)*: Spark's ephemeral in-memory catalog. Each run is self-contained; table metadata dies with the job; the only durable artifacts are the declared S3 outputs.
+- *Persistent catalog*: dbt models materialize as **Iceberg** tables in an external catalog — locally an [Iceberg REST catalog](https://github.com/tabular-io/iceberg-rest-image) container (the Glue Data Catalog stand-in), on real AWS `{"type": "glue"}` for the actual Glue Data Catalog. Tables persist across runs with snapshot history and are queryable by name from other engines (Athena/Trino on AWS).
+
+```sh
+nix run .#catalog-up                          # Iceberg REST catalog on :8181, warehouse in s3://etl-data/warehouse
+ICEBERG_REST_URI=http://localhost:8181 ./etl/run.sh
+curl -s localhost:8181/v1/namespaces          # -> raw, analytics (persisted table metadata)
 ```
 
 Honest scoping: FOSS emulators only implement the EMR Serverless **control plane** — job runs transition to `SUCCESS` but execute nothing — so the pipeline exercises the real submit/poll orchestration against the emulator while the identical transformation runs as local Spark compute. Pointed at real AWS (unset `AWS_ENDPOINT_URL`, real role ARN), the same submission path actually executes `spark_job.py` on EMR Serverless.

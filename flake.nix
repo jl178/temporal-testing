@@ -48,6 +48,8 @@
             down = mkApp "down" ''docker compose down "$@"'';
             prod-up = mkApp "prod-up" ''docker compose -f docker-compose.prod.yml up -d --build'';
             prod-down = mkApp "prod-down" ''docker compose -f docker-compose.prod.yml down "$@"'';
+            catalog-up = mkApp "catalog-up" ''docker compose -f docker-compose.catalog.yml up -d'';
+            catalog-down = mkApp "catalog-down" ''docker compose -f docker-compose.catalog.yml down "$@"'';
             examples = mkApp "examples" ''exec scripts/validate-local.sh "$@"'';
             infra-test = mkApp "infra-test" ''
               cd infra

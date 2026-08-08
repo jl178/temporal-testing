@@ -4,7 +4,7 @@ from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
     from activities import (
-        EtlConfig,
+        DbtSparkJob,
         run_local_transform,
         seed_raw_data,
         submit_emr_job,
@@ -16,21 +16,22 @@ TASK_QUEUE = "etl-pipeline"
 
 @workflow.defn
 class EtlPipelineWorkflow:
-    """Batch ETL: seed raw data -> submit to EMR Serverless (emulated
-    control plane) -> run the identical Spark+dbt transform locally ->
-    validate the mart landed in S3."""
+    """Generic dbt-Spark batch ETL: seed raw data (demo extract) -> submit
+    the job to EMR Serverless (emulated control plane) -> run the identical
+    spec locally as real Spark + dbt compute -> validate every declared
+    output landed in S3."""
 
     @workflow.run
-    async def run(self, config: EtlConfig) -> dict:
+    async def run(self, job: DbtSparkJob) -> dict:
         raw_rows = await workflow.execute_activity(
             seed_raw_data,
-            config,
+            job,
             start_to_close_timeout=timedelta(minutes=1),
         )
 
         emr = await workflow.execute_activity(
             submit_emr_job,
-            config,
+            job,
             start_to_close_timeout=timedelta(minutes=10),
             heartbeat_timeout=timedelta(seconds=30),
         )
@@ -39,14 +40,14 @@ class EtlPipelineWorkflow:
 
         transform = await workflow.execute_activity(
             run_local_transform,
-            config,
+            job,
             start_to_close_timeout=timedelta(minutes=15),
             heartbeat_timeout=timedelta(minutes=2),
         )
 
         validation = await workflow.execute_activity(
             validate_output,
-            config,
+            job,
             start_to_close_timeout=timedelta(minutes=1),
         )
 
