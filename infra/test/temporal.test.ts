@@ -167,6 +167,30 @@ describe('import-existing mode', () => {
   });
 });
 
+describe('service discovery disabled', () => {
+  const app = new App();
+  const shell = new Stack(app, 'Shell', { env: ENV });
+  const stack = new TemporalStack(app, 'Temporal', {
+    env: ENV,
+    vpc: importedVpc(shell),
+    serviceDiscovery: false,
+  });
+  const template = Template.fromStack(stack);
+
+  test('creates no Cloud Map resources and points the UI at the NLB', () => {
+    template.resourceCountIs('AWS::ServiceDiscovery::PrivateDnsNamespace', 0);
+    template.resourceCountIs('AWS::ServiceDiscovery::Service', 0);
+    const taskDefs = template.findResources('AWS::ECS::TaskDefinition');
+    const uiDef = Object.values(taskDefs).find((td: any) =>
+      JSON.stringify(td).includes('temporalio/ui'),
+    ) as any;
+    const env = uiDef.Properties.ContainerDefinitions[0].Environment;
+    const address = env.find((e: any) => e.Name === 'TEMPORAL_ADDRESS');
+    // Address is a CFN join over the NLB's DNSName attribute, not a Cloud Map name.
+    expect(JSON.stringify(address.Value)).toContain('DNSName');
+  });
+});
+
 describe('create-zone mode', () => {
   const app = new App();
   const shell = new Stack(app, 'Shell', { env: ENV });

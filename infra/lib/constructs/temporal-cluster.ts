@@ -33,6 +33,12 @@ export interface TemporalClusterProps {
   readonly publicUi?: boolean;
   /** Private DNS namespace for service discovery. @default temporal.local */
   readonly cloudMapNamespaceName?: string;
+  /**
+   * Register the server in a Cloud Map private DNS namespace. When false,
+   * in-VPC clients (including the UI) use the internal NLB instead.
+   * @default true
+   */
+  readonly serviceDiscovery?: boolean;
 }
 
 /**
@@ -56,11 +62,14 @@ export class TemporalCluster extends Construct {
     this.ecsCluster =
       props.ecsCluster ?? new ecs.Cluster(this, 'EcsCluster', { vpc: props.vpc });
 
+    const useServiceDiscovery = props.serviceDiscovery ?? true;
     const namespaceName = props.cloudMapNamespaceName ?? 'temporal.local';
-    const namespace = new servicediscovery.PrivateDnsNamespace(this, 'Namespace', {
-      name: namespaceName,
-      vpc: props.vpc,
-    });
+    const namespace = useServiceDiscovery
+      ? new servicediscovery.PrivateDnsNamespace(this, 'Namespace', {
+          name: namespaceName,
+          vpc: props.vpc,
+        })
+      : undefined;
 
     // --- Temporal server ---
     const serverLogs = new logs.LogGroup(this, 'ServerLogs', {
@@ -92,12 +101,14 @@ export class TemporalCluster extends Construct {
       desiredCount: 1,
       minHealthyPercent: 0,
       circuitBreaker: { rollback: true },
-      cloudMapOptions: {
-        cloudMapNamespace: namespace,
-        name: 'temporal-frontend',
-        dnsRecordType: servicediscovery.DnsRecordType.A,
-        dnsTtl: Duration.seconds(10),
-      },
+      cloudMapOptions: namespace
+        ? {
+            cloudMapNamespace: namespace,
+            name: 'temporal-frontend',
+            dnsRecordType: servicediscovery.DnsRecordType.A,
+            dnsTtl: Duration.seconds(10),
+          }
+        : undefined,
     });
     props.database.allowConnectionsFrom(this.serverService);
     // NLB health checks and in-VPC SDK clients reach the task directly.
@@ -116,6 +127,7 @@ export class TemporalCluster extends Construct {
     this.grpcLoadBalancer
       .addListener('Grpc', { port: GRPC_PORT })
       .addTargets('Server', { port: GRPC_PORT, targets: [this.serverService] });
+    this.grpcEndpoint = `${this.grpcLoadBalancer.loadBalancerDnsName}:${GRPC_PORT}`;
 
     // --- Temporal web UI ---
     this.uiService = new ecs_patterns.ApplicationLoadBalancedFargateService(this, 'Ui', {
@@ -130,7 +142,9 @@ export class TemporalCluster extends Construct {
         image: ecs.ContainerImage.fromRegistry(props.uiImage ?? DEFAULT_UI_IMAGE),
         containerPort: UI_PORT,
         environment: {
-          TEMPORAL_ADDRESS: `temporal-frontend.${namespaceName}:${GRPC_PORT}`,
+          TEMPORAL_ADDRESS: useServiceDiscovery
+            ? `temporal-frontend.${namespaceName}:${GRPC_PORT}`
+            : this.grpcEndpoint,
           TEMPORAL_UI_PORT: String(UI_PORT),
         },
       },
@@ -142,7 +156,6 @@ export class TemporalCluster extends Construct {
       'UI to Temporal frontend',
     );
 
-    this.grpcEndpoint = `${this.grpcLoadBalancer.loadBalancerDnsName}:${GRPC_PORT}`;
     this.uiUrl = `http://${this.uiService.loadBalancer.loadBalancerDnsName}`;
   }
 }

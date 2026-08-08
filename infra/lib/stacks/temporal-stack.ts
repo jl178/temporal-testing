@@ -36,6 +36,8 @@ export interface TemporalStackProps extends StackProps {
   readonly existingHostedZone?: ExistingHostedZoneConfig;
   /** @default true */
   readonly publicUi?: boolean;
+  /** Cloud Map service discovery for the server. @default true */
+  readonly serviceDiscovery?: boolean;
 }
 
 /**
@@ -82,6 +84,7 @@ export class TemporalStack extends Stack {
         : undefined,
       database: this.database,
       publicUi: props.publicUi,
+      serviceDiscovery: props.serviceDiscovery,
     });
 
     if (props.domainName) {

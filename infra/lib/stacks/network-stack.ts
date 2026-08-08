@@ -5,6 +5,8 @@ import { TemporalNetwork } from '../constructs/temporal-network';
 export interface NetworkStackProps extends StackProps {
   /** Existing VPC id to import (requires account/region env). Omit to create one. */
   readonly vpcId?: string;
+  /** NAT gateways for a created VPC. 0 is useful for emulators without EIP support. */
+  readonly natGateways?: number;
 }
 
 export class NetworkStack extends Stack {
@@ -17,6 +19,7 @@ export class NetworkStack extends Stack {
       vpc: props.vpcId
         ? ec2.Vpc.fromLookup(this, 'ImportedVpc', { vpcId: props.vpcId })
         : undefined,
+      natGateways: props.natGateways,
     });
     this.vpc = network.vpc;
   }

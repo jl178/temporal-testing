@@ -57,6 +57,9 @@ export class TemporalDatabase extends Construct {
       this.secret = props.existingDatabase.secret;
       this.existingSecurityGroup = props.existingDatabase.securityGroup;
     } else {
+      // An explicit DatabaseSecret (rather than the cluster's attached secret)
+      // so downstream Refs resolve to the secret ARN directly.
+      const secret = new rds.DatabaseSecret(this, 'Secret', { username: 'temporal' });
       this.cluster = new rds.DatabaseCluster(this, 'Cluster', {
         engine: rds.DatabaseClusterEngine.auroraPostgres({
           version: rds.AuroraPostgresEngineVersion.VER_16_4,
@@ -66,13 +69,13 @@ export class TemporalDatabase extends Construct {
         serverlessV2MaxCapacity: props.maxCapacity ?? 4,
         vpc: props.vpc,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-        credentials: rds.Credentials.fromGeneratedSecret('temporal'),
+        credentials: rds.Credentials.fromSecret(secret),
         defaultDatabaseName: 'temporal',
         removalPolicy: props.removalPolicy ?? RemovalPolicy.DESTROY,
       });
       this.endpointAddress = this.cluster.clusterEndpoint.hostname;
       this.port = 5432;
-      this.secret = this.cluster.secret!;
+      this.secret = secret;
     }
   }
 
