@@ -166,6 +166,7 @@ def resolve_transform_spec(cfg: IngestConfig, route: str, landed_key: str) -> di
             "format": "csv",
             "hygiene": {
                 "sanitize_headers": True,
+                "column_aliases": spec.get("column_aliases", {}),
                 "require_columns": spec.get("require_columns", []),
             },
         }

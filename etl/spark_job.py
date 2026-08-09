@@ -191,6 +191,17 @@ def load_inputs(spec: dict, spark) -> None:
         hygiene = inp.get("hygiene") or {}
         if hygiene.get("sanitize_headers"):
             df = df.toDF(*[sanitize_header(c) for c in df.columns])
+        # Semantic aliasing: vendors name the same field freely (add /
+        # Address / ADDRESS / adr). The route's spec maps every known
+        # variant to one canonical name so dbt sees a single schema.
+        aliases = hygiene.get("column_aliases") or {}
+        if aliases:
+            variant_to_canonical = {
+                sanitize_header(variant): canonical
+                for canonical, variants in aliases.items()
+                for variant in variants
+            }
+            df = df.toDF(*[variant_to_canonical.get(c, c) for c in df.columns])
         required = hygiene.get("require_columns") or []
         missing = [c for c in required if c not in df.columns]
         if missing:

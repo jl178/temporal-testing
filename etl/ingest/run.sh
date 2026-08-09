@@ -61,8 +61,10 @@ Order ID,Customer,Order Date,Amount,Status,record_type
 6,initech,2026-08-03,12.00,pending,orders
 7,acme,2026-08-03,99.95,completed,orders
 EOF
+# Deliberately vendor-messy headers: Seg/RGN alias to segment/region via
+# the route spec's column_aliases (semantic normalization, cluster-side).
 cat > "$TMP_DIR/customers_2026-08.csv" <<'EOF'
-Customer,Segment,Region,record_type
+Customer,Seg,RGN,record_type
 acme,Enterprise,US,customers
 globex,SMB,EU,customers
 initech,SMB,US,customers

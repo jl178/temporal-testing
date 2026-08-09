@@ -3,6 +3,11 @@
   "project_dir": "dbt",
   "dbt_args": ["build", "--select", "tag:customers"],
   "source_table": "raw.customers",
+  "column_aliases": {
+    "customer": ["cust", "customer_name"],
+    "segment": ["seg", "tier"],
+    "region": ["rgn", "geo"]
+  },
   "require_columns": ["customer", "segment", "region"],
   "outputs": [
     {
