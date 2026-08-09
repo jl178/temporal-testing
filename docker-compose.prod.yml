@@ -149,7 +149,7 @@ services:
         temporal operator namespace create --namespace team-app  --retention 72h  --description "Application team"        || true
         temporal operator namespace create --namespace team-data --retention 168h --description "Data engineering (ETL)"  || true
         for attr in BatchId Route SourceFile; do
-          temporal operator search-attribute create --name "$attr" --type Keyword || true
+          temporal operator search-attribute create --name "$$attr" --type Keyword || true
         done
         echo "namespaces + search attributes ready"
     restart: "no"
