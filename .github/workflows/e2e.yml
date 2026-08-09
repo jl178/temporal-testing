@@ -5,8 +5,13 @@ name: e2e
 # the real pipelines with assertions, exactly as run locally.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "17 6 * * *" # nightly
+  pull_request:
+    paths:
+      - "etl/**"
+      - "worker_platform/**"
+      - "examples/**"
+      - "docker-compose*.yml"
+      - ".github/workflows/e2e.yml"
   push:
     branches: [main]
     paths:
