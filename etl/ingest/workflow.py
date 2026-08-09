@@ -8,15 +8,17 @@ from temporalio.common import (
     SearchAttributePair,
     TypedSearchAttributes,
 )
-from temporalio.exceptions import ChildWorkflowError
+from temporalio.exceptions import ActivityError, ChildWorkflowError, WorkflowAlreadyStartedError
 
 with workflow.unsafe.imports_passed_through():
     from activities import DbtSparkJob
     from ingest.activities import (
         IngestConfig,
         classify_route,
+        decompressed_name,
         discover_sftp_files,
         land_sftp_file,
+        preprocess_file,
         quarantine_file,
         resolve_consolidation_spec,
         resolve_transform_spec,
@@ -105,6 +107,33 @@ class FileIngestWorkflow:
             retry_policy=LIGHT_RETRY,
         )
 
+        # Byte-shaped preprocess (e.g. gunzip) before routing — bounded,
+        # streamed, on the medium fleet. Bad archives quarantine.
+        if filename != decompressed_name(filename):
+            try:
+                landed_key = await workflow.execute_activity(
+                    preprocess_file,
+                    args=[cfg, landed_key],
+                    start_to_close_timeout=timedelta(minutes=10),
+                    heartbeat_timeout=timedelta(minutes=1),
+                    retry_policy=LIGHT_RETRY,
+                )
+            except ActivityError as err:
+                reason = str(err.cause) if err.cause else str(err)
+                quarantine_key = await workflow.execute_activity(
+                    quarantine_file,
+                    args=[cfg, landed_key, reason],
+                    start_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=LIGHT_RETRY,
+                )
+                return {
+                    "file": filename,
+                    "status": "quarantined",
+                    "quarantine_key": quarantine_key,
+                    "error": reason[:500],
+                }
+            filename = decompressed_name(filename)
+
         route = await workflow.execute_activity(
             classify_route,
             filename,
@@ -146,6 +175,15 @@ class FileIngestWorkflow:
                     ]
                 ),
             )
+        except WorkflowAlreadyStartedError:
+            # Same route+filename already being transformed in this batch
+            # (e.g. a stale twin of a renamed drop) — record, don't fail.
+            return {
+                "file": filename,
+                "status": "duplicate",
+                "route": route,
+                "error": "a transform for this route+filename is already running",
+            }
         except ChildWorkflowError as err:
             # Transform rejected the file (e.g. column contract violation) —
             # quarantine it server-side; the batch continues.

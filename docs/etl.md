@@ -8,9 +8,12 @@ normalization, quarantine without batch failure, an Iceberg lakehouse
 catalog, three interchangeable Spark execution modes, and worker fleets
 following production noisy-neighbor practice.
 
-**Architecture rule #1: workers never touch data content.** Activities move
-bytes (one SFTP stream) and metadata; all parsing, typing, and
-transformation happen in Spark + dbt on the cluster.
+**Architecture rule #1: workers move bytes, never queries.** Activities may
+process data only under the four-test policy in
+[workers.md](workers.md#when-may-data-flow-through-a-worker) — byte-shaped,
+bounded, streamed, profiled (the SFTP stream and the gunzip preprocess
+qualify); all parsing, typing, and transformation happen in Spark + dbt on
+the cluster.
 
 **Architecture rule #2: one query engine.** Everything is Spark SQL through
 one dbt project — locally against a Spark Connect container, on AWS against

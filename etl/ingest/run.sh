@@ -53,6 +53,9 @@ fi
 # Seed a multi-source vendor batch onto the SFTP server: three routed files
 # (messy headers on purpose) plus one structurally broken file that must end
 # up quarantined without failing the batch.
+# Idempotent seeding: clear previous drops so renamed/recompressed files
+# can't coexist with stale twins.
+docker exec etl-sftp sh -c 'rm -f /home/demo/upload/*' 2>/dev/null || true
 TMP_DIR=$(mktemp -d)
 cat > "$TMP_DIR/orders_2026-08.csv" <<'EOF'
 Order ID,Customer,Order Date,Amount,Status,record_type
@@ -72,6 +75,8 @@ acme,Enterprise,US,customers
 globex,SMB,EU,customers
 initech,SMB,US,customers
 EOF
+# Compressed vendor drop: exercises the byte-shaped preprocess stage
+# (streaming gunzip on the worker) before routing.
 cat > "$TMP_DIR/payments_2026-08.csv" <<'EOF'
 Payment ID,Order ID,Paid Amount,Paid Date,record_type
 901,1,120.50,2026-08-02,payments
@@ -79,8 +84,9 @@ Payment ID,Order ID,Paid Amount,Paid Date,record_type
 903,4,310.10,2026-08-03,payments
 904,5,55.99,2026-08-03,payments
 EOF
+gzip "$TMP_DIR/payments_2026-08.csv"
 head -c 200 /dev/urandom > "$TMP_DIR/zz_broken.csv"
-for f in "$TMP_DIR"/*.csv; do
+for f in "$TMP_DIR"/*.csv*; do
   docker cp "$f" "etl-sftp:/home/demo/upload/$(basename "$f")"
 done
 rm -rf "$TMP_DIR"

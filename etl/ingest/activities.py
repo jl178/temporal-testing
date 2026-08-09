@@ -1,12 +1,13 @@
 """Activities for the file-ingestion pipeline.
 
-Architecture rule: THE WORKER NEVER TOUCHES DATA CONTENT. Every activity
-here is either a byte stream (SFTP -> S3, the unavoidable minimum of the
-pull model), pure metadata (filename routing, registry lookups), or a
-server-side S3 copy (quarantine). All parsing, hygiene, typing, and
-transformation happen in Spark + dbt on the cluster (see spark_job.py:
-permissive read, header sanitization, column contracts — driven by each
-route's spec).
+Data-through-workers policy (docs/workers.md): a worker may process data
+only when the operation is BYTE-shaped (not query-shaped), BOUNDED by an
+enforced cap, STREAMED (never whole-payload-in-RAM), and running on an
+appropriately PROFILED fleet. That admits the SFTP stream, the gunzip
+preprocess, metadata routing, and server-side S3 copies here. Everything
+query-shaped or unbounded — parsing, hygiene, typing, transformation —
+happens in Spark + dbt on the cluster (see spark_job.py: permissive read,
+header sanitization, column contracts — driven by each route's spec).
 
 On AWS, even the SFTP stream disappears: AWS Transfer Family lands vendor
 SFTP directly into S3 and an S3 event starts the workflow — the worker then
@@ -14,6 +15,7 @@ touches no bytes at all.
 """
 import asyncio
 import fnmatch
+import gzip
 import json
 import os
 import tempfile
@@ -23,6 +25,7 @@ import asyncssh
 import boto3
 import yaml
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from runtime_env import DEFAULT_BUCKET
 
@@ -53,7 +56,7 @@ class SftpSource:
     username: str = "demo"
     password: str = "demo"
     path: str = "/upload"
-    pattern: str = "*.csv"
+    pattern: str = "*.csv*"  # includes compressed drops (.csv.gz)
 
 
 @dataclass
@@ -113,6 +116,50 @@ async def land_sftp_file(cfg: IngestConfig, filename: str) -> str:
         await asyncio.to_thread(s3.upload_file, local, cfg.bucket, key)
     return key
 
+
+
+# Byte-shaped preprocess (policy-compliant: bounded, streamed, profiled).
+# Extension-driven: .gz is mechanical; steps needing per-vendor knowledge
+# (e.g. PGP decrypt with a vendor key) would come from the route spec.
+PREPROCESS_MAX_DECOMPRESSED = 1 * 1024**3  # gzip-bomb guard
+_PREPROCESS_CHUNK = 8 * 1024**2
+
+
+def decompressed_name(filename: str) -> str:
+    """The name a file will carry after preprocess (pure; used for routing)."""
+    return filename[:-3] if filename.endswith(".gz") else filename
+
+
+@activity.defn
+def preprocess_file(cfg: IngestConfig, landed_key: str) -> str:
+    """Streaming gunzip: landing/x.csv.gz -> landing/x.csv. Disk-buffered
+    chunks, hard cap on decompressed size, deterministic failures are
+    non-retryable (the caller quarantines the original object)."""
+    s3 = _s3()
+    filename = os.path.basename(landed_key)
+    target_key = f"{cfg.landing_prefix}/{decompressed_name(filename)}"
+    body = s3.get_object(Bucket=cfg.bucket, Key=landed_key)["Body"]
+    total = 0
+    try:
+        with tempfile.NamedTemporaryFile() as out:
+            with gzip.GzipFile(fileobj=body) as stream:
+                while chunk := stream.read(_PREPROCESS_CHUNK):
+                    total += len(chunk)
+                    if total > PREPROCESS_MAX_DECOMPRESSED:
+                        raise ApplicationError(
+                            f"{filename}: decompressed size exceeds "
+                            f"{PREPROCESS_MAX_DECOMPRESSED} bytes",
+                            non_retryable=True,
+                        )
+                    out.write(chunk)
+                    activity.heartbeat(f"decompressed {total} bytes")
+            out.flush()
+            s3.upload_file(out.name, cfg.bucket, target_key)
+    except (gzip.BadGzipFile, EOFError) as exc:
+        raise ApplicationError(
+            f"{filename}: not valid gzip ({exc})", non_retryable=True
+        )
+    return target_key
 
 @activity.defn
 def classify_route(filename: str) -> str | None:

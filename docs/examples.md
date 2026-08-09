@@ -98,7 +98,7 @@ The variations at a glance (all validated):
 |---|---|---|
 | Single transform, prod-shaped | `./etl/run.sh` | light workers + external Spark service (Connect), EMR submit rehearsal, S3-direct data plane |
 | Persistent catalog | `ICEBERG_REST_URI=http://localhost:8181 ./etl/run.sh` | dbt models materialize as Iceberg tables with snapshot history |
-| **The complex batch** | `ICEBERG_REST_URI=… ./etl/ingest/run.sh` | 4-file parallel fan-out, 3 routes, header aliasing, quarantine, canonical-model tests, cross-route consolidation |
+| **The complex batch** | `ICEBERG_REST_URI=… ./etl/ingest/run.sh` | 4-file parallel fan-out, 3 routes, gzip preprocess, header aliasing, quarantine, canonical-model tests, cross-route consolidation |
 | Remote-Spark opt-out | `SPARK_CONNECT_URI="" ./etl/run.sh` | in-process fallback on the isolated heavy queue |
 | Namespace isolation | `TEMPORAL_NAMESPACE=team-data ./etl/run.sh` | the data team's pipeline in its own tenancy boundary |
 | Scheduled operation | `python -m ingest.schedule create · trigger · unpause` | the batch as a Temporal Schedule (hourly, overlap=skip) — validated by triggering a full run |

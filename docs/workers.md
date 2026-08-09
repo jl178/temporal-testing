@@ -190,6 +190,25 @@ Operating it day to day:
   construct once per fleet (typically: small for workflows, medium for
   activities, large only if their activity is the compute).
 
+## When may data flow through a worker?
+
+The old absolute ("workers never touch data content") predates the profile
+matrix. The current policy: a worker may process data only when **all four**
+hold —
+
+| Test | Meaning |
+|---|---|
+| **Byte-shaped** | decrypt, decompress, checksum, archive-split, render — no SQL dialect involved. Query-shaped work always goes to the external engine (the single-engine rule). |
+| **Bounded** | an enforced cap (e.g. the gunzip stage's 1 GiB decompression guard); unbounded input goes to the cluster or quarantines |
+| **Streamed** | chunked through disk/pipes, never whole-payload-in-RAM |
+| **Profiled** | on a fleet whose shape admits it (medium for streams, large/large-mem when the item is the compute) |
+
+Working example: the ingest pipeline's **gunzip preprocess** — a compressed
+vendor drop is stream-decompressed on the medium fleet (capped, heartbeated,
+bad archives quarantined non-retryably) before routing. The converse stays
+firm: the landing→table read, all transformations, and bulk outputs are
+cluster-side because they fail the byte-shaped or bounded test.
+
 ## Rules the runner encodes (so teams don't have to remember them)
 
 - Sync (blocking) activities always get a thread pool — the boto3-in-async
