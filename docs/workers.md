@@ -61,6 +61,24 @@ registration explicit and reviewable. Changing *in-flight* workflow logic
 needs `workflow.patched()` or Worker Versioning (build IDs) — activities
 are simpler: not replayed, so new code applies on next retry.
 
+### Starters register nothing
+
+Registration is a worker-only concept. A starter is just a gRPC client
+that sends **names**: workflow type + task queue + id + serialized args —
+the server stores strings, a worker's table resolves them. Our starters
+import the workflow class purely for type-safety (the import never
+executes workflow code); `client.execute_workflow("InvoiceWorkflow", …)`
+with a bare string is equally valid — which is how the UI, the CLI, and
+cross-language callers start workflows.
+
+Image topology: **one image per codebase, one command per fleet, replicas
+per scale.** The three billing fleets are the same image with three
+different runner commands. Starters aren't a deployment artifact at all —
+they're call sites (an API handler, a Lambda, a Temporal Schedule, a human
+in the UI). Org pattern: a tiny per-domain *contracts* package (type
+names, queue names, arg dataclasses — nothing executable) shared by the
+worker repo and its callers.
+
 ## A concrete trace — one file through the fleets
 
 The complex batch starts four fleets (default mode). Following
