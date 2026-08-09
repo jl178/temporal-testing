@@ -20,9 +20,9 @@ etl/.work/
 etl/dbt/logs/
 etl/dbt/target/
 
-# .NET
-bin/
-obj/
+# .NET (scoped — a bare bin/ would swallow infra/bin/app.ts)
+examples/csharp/**/bin/
+examples/csharp/**/obj/
 *.user
 
 # Nix / direnv
