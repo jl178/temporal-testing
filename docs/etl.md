@@ -239,6 +239,13 @@ TEMPORAL_NAMESPACE=team-data ./etl/ingest/run.sh      # in the data team's names
 python -m ingest.schedule create      # hourly, created paused, overlap=skip
 python -m ingest.schedule unpause     # go continuous
 python -m ingest.schedule trigger     # fire one batch now
+# Mechanism: a Schedule is a durable SERVER-side data object (spec + the
+# workflow name/args to start + policies) — the cluster's sys-worker fires
+# it; no client process needs to exist. Workers down => the run's tasks
+# buffer; cluster down => missed fires catch up (window: 1y); overlap=skip
+# never piles a second batch on a slow one; backfill is a first-class API.
+# Cadence changes are API calls, visible in the UI's Schedules tab — never
+# code deploys.
 ```
 
 Environment contract: `TEMPORAL_ADDRESS` · `TEMPORAL_NAMESPACE` ·
