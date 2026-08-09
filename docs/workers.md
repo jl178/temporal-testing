@@ -70,16 +70,39 @@ radius). So: each team deploys its own workers from its own image, picks a
 standard profile, and names its queues `{domain}-{concern}` — the platform
 standardizes the *envelope*, ownership stays with the team.
 
-## The profiles
+## The profiles — 5 sizes × 3 shapes
 
-| Profile | Envelope | What belongs here |
+**Sizes** pick the tier; **shapes** lean the same tier toward compute or
+memory. `<size>` is the balanced general shape; `<size>-cpu` and
+`<size>-mem` are its variants. Choose general unless profiling says not to.
+
+| Size | Concurrency envelope | What belongs here |
 |---|---|---|
-| **small** | 16 workflow tasks · 8 activity slots | **Workflow coordination.** Replay is CPU-light and must never queue behind activities — workflow-only workers are always small. Also trivial pure-logic activities. |
-| **medium** | 8 wf tasks · 16 activity slots · 16-thread pool | **I/O-bound activities**: API calls, boto3/S3 metadata, DB queries, SFTP streams, launchers that submit-and-poll external compute (EMR, Batch), dbt-as-client over Spark Connect. Blocking (sync) activities run on the thread pool — an event loop is never stalled. |
-| **large** | resource-tuned slots (80% mem / 90% CPU targets, hard-bounded [1,2]) · 4/s server-enforced queue dispatch cap | **The activity IS the compute**: subprocess JVMs, ffmpeg, in-process ML inference, big in-memory crunches. Prefer offloading to a managed service when one fits — large fleets are for work with nowhere better to live. |
+| **xsmall** | 8 wf tasks · 4 slots | Sidecar-scale coordination: low-traffic workflow-only fleets, glue, dev fleets |
+| **small** | 16 wf tasks · 8 slots | **Workflow coordination** at normal traffic — replay is CPU-light and must never queue behind activities |
+| **medium** | 8 wf tasks · 16 slots · 16-thread pool | **I/O-bound activities**: API/boto3/DB calls, SFTP streams, submit-and-poll launchers, dbt-as-client over Spark Connect |
+| **large** | resource-tuned slots [1,2] · 4/s queue cap | **The activity IS the compute**: subprocess JVMs, ffmpeg, in-process ML. Prefer managed compute when it fits |
+| **xlarge** | resource-tuned slots [1,4] · 8/s queue cap | The large class, for workloads that consistently outgrow it |
 
-Profile definitions (one place to tune platform-wide):
-`etl/worker_platform/profiles.py`.
+Shape semantics: `-cpu` changes only the box (more vCPU per GB); `-mem`
+changes the box (more GB per vCPU) **and halves activity admission** — each
+task is assumed to hold real memory.
+
+Fargate sizing per profile (CDK `WORKER_PROFILE_SIZES`, vCPU / GB):
+
+| Size | general | -cpu | -mem |
+|---|---|---|---|
+| xsmall | 0.25 / 0.5 | 0.5 / 1 | 0.25 / 2 |
+| small | 0.5 / 1 | 1 / 2 | 0.5 / 4 |
+| medium | 1 / 2 | 2 / 4 | 1 / 8 |
+| large | 4 / 16 | 8 / 16 | 4 / 30 |
+| xlarge | 8 / 32 | 16 / 32 | 8 / 60 |
+
+Definitions live in one generated matrix per side
+(`etl/worker_platform/profiles.py` and the CDK map), with explicit
+`cpu`/`memoryLimitMiB` overrides for true outliers. Rule of thumb: one
+fleet overriding is normal; a *class* of fleets overriding the same way
+means the matrix is missing an entry.
 
 ## How the ETL instantiates it
 
