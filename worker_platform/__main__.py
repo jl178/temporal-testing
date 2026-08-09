@@ -36,7 +36,12 @@ def _load(spec: str, marker: str) -> list:
     found = [
         obj
         for name, obj in vars(module).items()
-        if not name.startswith("_") and hasattr(obj, marker)
+        if not name.startswith("_")
+        and hasattr(obj, marker)
+        # Only what the module itself defines — never re-register imports
+        # (a workflow imported for child-workflow typing must not be
+        # served from this fleet's queue).
+        and getattr(obj, "__module__", None) == module.__name__
     ]
     if not found:
         raise SystemExit(f"no registrations with {marker} found in {module_name}")

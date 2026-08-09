@@ -1,5 +1,7 @@
-"""Shared env-driven runtime options for starters (DRY across entrypoints)."""
+"""Shared runtime constants + env-driven options (DRY across entrypoints)."""
 import os
+
+DEFAULT_BUCKET = "etl-data"
 
 
 def catalog_from_env() -> dict | None:
@@ -8,7 +10,7 @@ def catalog_from_env() -> dict | None:
             "type": "rest",
             "name": "lake",
             "uri": os.environ["ICEBERG_REST_URI"],
-            "warehouse": "s3://etl-data/warehouse",
+            "warehouse": f"s3://{DEFAULT_BUCKET}/warehouse",
         }
     return None
 

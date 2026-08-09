@@ -24,6 +24,8 @@ import boto3
 import yaml
 from temporalio import activity
 
+from runtime_env import DEFAULT_BUCKET
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPECS_DIR = os.path.join(os.path.dirname(HERE), "specs")
 CANONICAL_MODEL = os.path.join(
@@ -57,7 +59,7 @@ class SftpSource:
 @dataclass
 class IngestConfig:
     sftp: SftpSource = field(default_factory=SftpSource)
-    bucket: str = "etl-data"
+    bucket: str = DEFAULT_BUCKET
     landing_prefix: str = "landing"
     quarantine_prefix: str = "quarantine"
     # Passed through to the spawned DbtSparkJob (None = ephemeral catalog).

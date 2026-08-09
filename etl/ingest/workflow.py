@@ -21,6 +21,7 @@ with workflow.unsafe.imports_passed_through():
         resolve_consolidation_spec,
         resolve_transform_spec,
     )
+    from workflow import TASK_QUEUE as ETL_TASK_QUEUE
     from workflow import EtlPipelineWorkflow
 
 TASK_QUEUE = "file-ingest"
@@ -78,7 +79,7 @@ class FileIngestWorkflow:
                 EtlPipelineWorkflow.run,
                 DbtSparkJob(**job_kwargs),
                 id=f"consolidate-{cfg.consolidation_spec}-{workflow.info().workflow_id}",
-                task_queue="etl-pipeline",
+                task_queue=ETL_TASK_QUEUE,
                 search_attributes=TypedSearchAttributes(
                     [
                         SearchAttributePair(BATCH_ID, workflow.info().workflow_id),
@@ -136,7 +137,7 @@ class FileIngestWorkflow:
                 EtlPipelineWorkflow.run,
                 DbtSparkJob(**job_kwargs),
                 id=f"transform-{route}-{filename}",
-                task_queue="etl-pipeline",
+                task_queue=ETL_TASK_QUEUE,
                 search_attributes=TypedSearchAttributes(
                     [
                         SearchAttributePair(BATCH_ID, workflow.info().workflow_id),

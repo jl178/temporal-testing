@@ -28,11 +28,10 @@ etl/
 │                           #   run_local_transform (spark_job subprocess/client),
 │                           #   validate_output (metadata-first)
 ├── workflow.py             # EtlPipelineWorkflow: seed? → submit EMR → transform → validate
-├── worker.py               # workflow-only worker        (queue etl-pipeline)
-├── light_worker.py         # activity worker, 16 slots   (queue etl-pipeline)
-├── heavy_worker.py         # in-process fallback fleet   (queue etl-heavy, resource-tuned)
+│                           #   (fleets: repo-root worker_platform, see docs/workers.md)
 ├── starter.py              # runs the demo job; env-driven catalog/spark mode
-├── runtime_env.py          # shared env → config helpers
+├── runtime_env.py          # shared constants (DEFAULT_BUCKET) + env → config helpers
+├── tests/                  # unit tests: profiles, spec resolution, runner helpers (CI)
 ├── requirements.txt        # temporalio · dbt-spark[session] · pyspark[connect] · boto3 · asyncssh
 ├── dbt/                    # ONE dbt project for every route
 │   ├── dbt_project.yml     #   file_format follows catalog mode (parquet ⇄ iceberg)
@@ -51,8 +50,7 @@ etl/
     ├── run.sh              #   the complex-batch e2e (seeds 4 vendor files over SFTP)
     ├── workflow.py         #   FileIngestWorkflow: parallel fan-out + consolidation
     ├── activities.py       #   discover/land/classify/quarantine/resolve (bytes+metadata only)
-    ├── worker.py           #   workflow-only worker  (queue file-ingest)
-    └── activity_worker.py  #   activity worker       (queue file-ingest)
+    └── schedule.py         #   Temporal Schedule: hourly batch (create/trigger/pause)
 ```
 
 ## The data journey
@@ -184,9 +182,9 @@ pattern for per-item pipelines.
 
 ## Worker topology (noisy-neighbor practice)
 
-Fleets are instances of the generic **worker platform** (see
-[workers.md](workers.md)): queue + size profile + registered code, run by
-`python -m worker_platform`:
+Fleets are instances of the generic **worker platform** (repo-root
+`worker_platform/`, see [workers.md](workers.md)): queue + size profile +
+registered code, run by `python -m worker_platform`:
 
 | Fleet | Queue | Profile | Registers |
 |---|---|---|---|
@@ -233,6 +231,11 @@ ICEBERG_REST_URI=http://localhost:8181 \
   ./etl/ingest/run.sh                                 # the complex batch + consolidation
 SPARK_CONNECT_URI="" ./etl/run.sh                     # in-process fallback
 TEMPORAL_NAMESPACE=team-data ./etl/ingest/run.sh      # in the data team's namespace
+
+# scheduled operation (fleets must be deployed/running):
+python -m ingest.schedule create      # hourly, created paused, overlap=skip
+python -m ingest.schedule unpause     # go continuous
+python -m ingest.schedule trigger     # fire one batch now
 ```
 
 Environment contract: `TEMPORAL_ADDRESS` · `TEMPORAL_NAMESPACE` ·

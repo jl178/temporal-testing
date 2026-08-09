@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  infra:
+    name: CDK typecheck, assertion tests, synth
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+      - run: npm ci
+      - run: npx tsc
+      - run: npx jest
+      - name: cdk synth (create-everything mode)
+        run: npx cdk synth --quiet
+        env:
+          CDK_DEFAULT_ACCOUNT: "111111111111"
+          CDK_DEFAULT_REGION: us-east-1
+
+  python-unit:
+    name: worker platform + spec resolution unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r etl/requirements-dev.txt
+      - run: python -m pytest etl/tests -q
+
+  # The full e2e suites (Docker Compose Temporal stack, Spark Connect,
+  # emulator, dbt) run locally via ./etl/run.sh, ./etl/ingest/run.sh and
+  # nix run .#examples — too heavy for every push, wired for CI later via
+  # a nightly job with the nix devshell.

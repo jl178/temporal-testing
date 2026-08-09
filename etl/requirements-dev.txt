@@ -1,0 +1,7 @@
+# Unit-test dependencies (CI installs these + the light runtime deps; the
+# heavy compute deps — pyspark, dbt — are exercised by the e2e scripts).
+pytest>=8,<9
+temporalio>=1.9,<2
+boto3>=1.34,<2
+asyncssh>=2.14,<3
+PyYAML>=6,<7

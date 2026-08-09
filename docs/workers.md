@@ -5,7 +5,7 @@ is a deployment that polls a **queue** with a **size profile** and registers
 **code**. Those are the only three decisions any team makes:
 
 ```sh
-python -m worker_platform --queue <queue> --profile <small|medium|large> \
+python -m worker_platform --queue <queue> --profile <size[-cpu|-mem]> \
     --workflows <module[:Class,…]> --activities <module[:fn,…]>
 ```
 
@@ -99,7 +99,7 @@ Fargate sizing per profile (CDK `WORKER_PROFILE_SIZES`, vCPU / GB):
 | xlarge | 8 / 32 | 16 / 32 | 8 / 60 |
 
 Definitions live in one generated matrix per side
-(`etl/worker_platform/profiles.py` and the CDK map), with explicit
+(`worker_platform/profiles.py` and the CDK map), with explicit
 `cpu`/`memoryLimitMiB` overrides for true outliers. Rule of thumb: one
 fleet overriding is normal; a *class* of fleets overriding the same way
 means the matrix is missing an entry.
@@ -117,6 +117,12 @@ means the matrix is missing an entry.
 `compute-large` is deliberately generic (not `etl-*`): it's the platform's
 big-compute lane, and any team's activity-is-the-compute workload would
 route there — with its own fleet registering its own code.
+
+The package lives at the repo root (`worker_platform/`) — it is a platform
+library, not an ETL helper. The proof-by-second-tenant is
+`examples/platform-demo/`: a billing workload (its own queues, its own
+code) running on the same runner and profiles with zero ETL involvement —
+`./examples/platform-demo/run.sh` prints `PLATFORM DEMO: PASS`.
 
 ## On ECS — the deployment shape
 
@@ -162,6 +168,9 @@ What the construct wires for you:
   backlog stats) through the cluster's HTTP API, publishes
   `ApproximateBacklogCount` to CloudWatch, and the service step-scales on
   it: +1 at the threshold, +3 at 4×, drain to min on empty.
+- **The page-worthy alarm** — `ApproximateBacklogAgeSeconds > 300` for 5
+  minutes (oldest task waiting too long: fleet under-scaled or down) — the
+  schedule-to-start alarm, defined with the fleet.
 - **Networking** — `allowGrpcTo` opens the one security-group rule a worker
   needs. Workers make only *outbound* connections (long-poll); no inbound
   ports, no load balancer, no service discovery entry.

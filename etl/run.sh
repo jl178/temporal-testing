@@ -3,6 +3,8 @@
 # and an AWS emulator (AWS_ENDPOINT_URL, default http://localhost:4566).
 set -euo pipefail
 cd "$(dirname "$0")"
+# worker_platform is a repo-level package (usable by any workload)
+export PYTHONPATH="$(git rev-parse --show-toplevel)${PYTHONPATH:+:$PYTHONPATH}"
 
 export AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://localhost:4566}"
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
@@ -42,7 +44,7 @@ fi
 # prod-shaped mode all fleets are light and Spark is an external service.
 # Clean up workers orphaned by interrupted earlier runs — a stale poller
 # racing a live one corrupts shared state.
-pkill -f "worker_platform --queue" 2>/dev/null || true
+pkill -f "worker_platfor[m] --queue" 2>/dev/null || true
 sleep 1
 
 PIDS=()

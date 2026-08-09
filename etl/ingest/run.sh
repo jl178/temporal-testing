@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# End-to-end file-ingestion pipeline:
-#   SFTP -> S3 landing -> rules-based parse -> S3 staged -> classify ->
-#   dispatch transform-spec via child workflow -> S3 curated
+# End-to-end file-ingestion pipeline (the complex batch):
+#   SFTP -> S3 landing -> route by filename pattern -> child transform per
+#   route (cluster-side hygiene + dbt via the canonical model) -> curated,
+#   with quarantine for nonconforming files and optional consolidation.
 #
-# Requires: Temporal (localhost:7233), an AWS emulator (:4566), and the SFTP
-# test container (nix run .#sftp-up). Seeds a demo vendor file over SFTP.
+# Requires: Temporal (localhost:7233) and an AWS emulator (:4566); the SFTP
+# and Spark containers auto-start. Seeds a 4-file vendor batch over SFTP.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# worker_platform is a repo-level package (usable by any workload)
+export PYTHONPATH="$(git rev-parse --show-toplevel)${PYTHONPATH:+:$PYTHONPATH}"
 
 export AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://localhost:4566}"
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
@@ -89,7 +92,7 @@ rm -rf "$TMP_DIR"
 # Generic worker platform: each fleet = queue + size profile + code.
 # Clean up workers orphaned by interrupted earlier runs — a stale poller
 # racing a live one corrupts shared state.
-pkill -f "worker_platform --queue" 2>/dev/null || true
+pkill -f "worker_platfor[m] --queue" 2>/dev/null || true
 sleep 1
 
 PIDS=()

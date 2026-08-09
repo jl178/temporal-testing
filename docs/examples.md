@@ -74,7 +74,18 @@ TEMPORAL_NAMESPACE=team-app         # any namespace
 The Python example doubles as the prod-stack's containerized worker
 (`examples/python/Dockerfile`) — same code, deployed as a service.
 
-## 3 · The ETL — `etl/`
+## 3 · The platform demo — `examples/platform-demo/`
+
+The proof the worker platform is business-generic: a **billing** workload
+(own queues `billing`/`billing-render`, own code, nothing ETL) deployed as
+three fleets via the generic runner — coordination (small), I/O (medium),
+and a rendering lane (large) that a pile-up can never leak out of.
+
+```sh
+./examples/platform-demo/run.sh      # PLATFORM DEMO: PASS
+```
+
+## 4 · The ETL — `etl/`
 
 The full real-world example: SFTP ingestion → per-route dbt-Spark transforms
 → Iceberg catalog → curated S3, orchestrated by Temporal with parallel
@@ -90,3 +101,4 @@ The variations at a glance (all validated):
 | **The complex batch** | `ICEBERG_REST_URI=… ./etl/ingest/run.sh` | 4-file parallel fan-out, 3 routes, header aliasing, quarantine, canonical-model tests, cross-route consolidation |
 | Remote-Spark opt-out | `SPARK_CONNECT_URI="" ./etl/run.sh` | in-process fallback on the isolated heavy queue |
 | Namespace isolation | `TEMPORAL_NAMESPACE=team-data ./etl/run.sh` | the data team's pipeline in its own tenancy boundary |
+| Scheduled operation | `python -m ingest.schedule create · trigger · unpause` | the batch as a Temporal Schedule (hourly, overlap=skip) — validated by triggering a full run |

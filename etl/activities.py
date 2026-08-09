@@ -5,11 +5,12 @@ The pipeline is generic: `DbtSparkJob` describes any dbt-spark workload
 to S3). `spark_job.py` executes the spec; the demo defaults below are just
 one instance (orders -> daily_revenue).
 
-The EMR Serverless submission runs against whatever AWS_ENDPOINT_URL points
-at (a local emulator such as LocalEmu, or real AWS). Local emulators only
-emulate the EMR Serverless control plane — job runs reach a terminal state
-but execute nothing — so the pipeline also runs the identical spec locally
-(spark_job.py: Spark + dbt) as its compute step.
+Execution posture (see docs/etl.md): by default the transform activity is a
+thin client — dbt compiles SQL and an EXTERNAL Spark service executes it
+(spark_remote: a local Spark Connect container, or an EMR Serverless session
+on AWS). The EMR batch submission is always exercised (real control-plane
+calls; local emulators don't run the compute). In-process Spark exists only
+as the explicit fallback, routed to the compute-large queue.
 """
 import asyncio
 import csv
@@ -26,6 +27,8 @@ from dataclasses import dataclass, field
 
 import boto3
 from temporalio import activity
+
+from runtime_env import DEFAULT_BUCKET
 from temporalio.exceptions import ApplicationError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,7 +58,7 @@ def _emr():
 class DbtSparkJob:
     """A generic dbt-spark workload. Keys are S3 keys within `bucket`."""
 
-    bucket: str = "etl-data"
+    bucket: str = DEFAULT_BUCKET
     name: str = "daily-revenue"
     # dbt project directory, relative to etl/ (uploaded to S3 for EMR runs)
     project_dir: str = "dbt"

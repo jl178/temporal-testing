@@ -249,6 +249,15 @@ describe('autoscaled worker fleet', () => {
     });
   });
 
+  test('alarms when the oldest task waits over five minutes', () => {
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      MetricName: 'ApproximateBacklogAgeSeconds',
+      Threshold: 300,
+      EvaluationPeriods: 5,
+      TreatMissingData: 'notBreaching',
+    });
+  });
+
   test('worker container knows its queue, namespace, command, and profile size', () => {
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
       Cpu: '4096',

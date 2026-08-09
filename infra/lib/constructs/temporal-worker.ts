@@ -234,6 +234,25 @@ def handler(event, context):
       period: Duration.minutes(1),
     });
 
+    // The page-worthy alarm: tasks waiting >5 minutes means the fleet is
+    // under-scaled or down (schedule-to-start latency proxy).
+    new cloudwatch.Alarm(this, 'BacklogAgeAlarm', {
+      metric: new cloudwatch.Metric({
+        namespace: metricNamespace,
+        metricName: 'ApproximateBacklogAgeSeconds',
+        dimensionsMap: dimensions,
+        statistic: 'Maximum',
+        period: Duration.minutes(1),
+      }),
+      threshold: 300,
+      evaluationPeriods: 5,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription:
+        `Task queue ${props.taskQueue}: oldest task waiting over 5 minutes — ` +
+        'worker fleet under-scaled or down',
+    });
+
     const scaleUp = scaling.scaleUpBacklog ?? 100;
     const capacity = this.service.autoScaleTaskCount({
       minCapacity: scaling.minCapacity ?? 1,

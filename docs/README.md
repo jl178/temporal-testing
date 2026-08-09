@@ -25,6 +25,10 @@ This repo demonstrates Temporal at three levels, each usable on its own:
    generates the normalization, an Iceberg catalog, and three execution
    modes that map 1:1 onto AWS.
 
+CI (`.github/workflows/ci.yml`) runs the CDK assertion tests + synth and
+the Python unit suite on every push; the heavier e2e suites run locally via
+the commands below.
+
 Quick start for each level:
 
 ```sh
