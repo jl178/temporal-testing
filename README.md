@@ -212,6 +212,8 @@ Without a catalog the same batch still runs (3 parallel transforms + 1 quarantin
 
 ### Worker architecture (noisy-neighbor isolation)
 
+**Production framing first:** in real Temporal deployments, workers are *all* light — pure orchestrators that submit work to purpose-built compute (EMR, Batch, Databricks, a warehouse) and heartbeat-poll it. The `etl-heavy` fleet below exists because local emulators can't execute EMR compute, so the transform runs as a worker subprocess *locally only*; on AWS you deploy only light fleets and the heavy queue disappears (the EMR submit path or a Spark Connect session carries the compute). Heavy worker fleets are legitimate in prod only when the activity *is* the compute (app-native work like transcoding or in-process ML that has no managed service).
+
 Five split fleets across three task queues — workflow processing separated from activity execution, and workload classes separated from each other:
 
 | Fleet | Queue | Runs | Admission |
