@@ -55,6 +55,36 @@ jobs:
           done
           echo "preflight OK: all target stacks are net-new"
 
+      - name: Grant run-scoped CloudFormation policy (removed in teardown)
+        run: |
+          cat > /tmp/cfn-policy.json <<EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "TemporalTestingEphemeralStacks",
+                "Effect": "Allow",
+                "Action": ["cloudformation:*"],
+                "Resource": [
+                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/TemporalNetworkStack-$SUFFIX/*",
+                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/TemporalStack-$SUFFIX/*",
+                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/$TOOLKIT_STACK/*"
+                ]
+              },
+              {
+                "Sid": "NonStackScopedReadOnly",
+                "Effect": "Allow",
+                "Action": ["cloudformation:ValidateTemplate", "cloudformation:DescribeStacks"],
+                "Resource": "*"
+              }
+            ]
+          }
+          EOF
+          aws iam put-user-policy --user-name cicd_user \
+            --policy-name temporal-testing-ephemeral-cfn \
+            --policy-document file:///tmp/cfn-policy.json
+          sleep 10  # IAM propagation
+
       - name: Bootstrap (isolated qualifier + toolkit)
         run: |
           npx cdk bootstrap "aws://$ACCOUNT/us-east-1" \
@@ -96,6 +126,9 @@ jobs:
           aws cloudformation wait stack-delete-complete --stack-name "$TOOLKIT_STACK" || true
           aws s3 rb "s3://cdk-$QUALIFIER-assets-$ACCOUNT-us-east-1" --force || true
           aws ecr delete-repository --repository-name "cdk-$QUALIFIER-container-assets-$ACCOUNT-us-east-1" --force || true
+          # Remove the run-scoped CloudFormation grant
+          aws iam delete-user-policy --user-name cicd_user \
+            --policy-name temporal-testing-ephemeral-cfn || true
 
       - name: Post-teardown audit — nothing of ours remains
         if: always()
