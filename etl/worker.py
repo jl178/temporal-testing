@@ -1,17 +1,15 @@
 import asyncio
 import os
-from concurrent.futures import ThreadPoolExecutor
 
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from activities import seed_raw_data, submit_emr_job, validate_output
 from workflow import TASK_QUEUE, EtlPipelineWorkflow
 
-# Light fleet: workflow tasks + cheap I/O-bound activities. High slots are
-# fine — nothing here is memory- or CPU-heavy. The Spark-spawning transform
-# is deliberately NOT registered here (see heavy_worker.py).
-MAX_ACTIVITIES = 16
+# Workflow-only worker: replay/decision processing is CPU-light and must
+# never queue behind activities — no activity, however badly behaved, can
+# delay workflow progress on this fleet (activities live in light_worker.py
+# and heavy_worker.py).
 
 
 async def main() -> None:
@@ -23,14 +21,9 @@ async def main() -> None:
         client,
         task_queue=TASK_QUEUE,
         workflows=[EtlPipelineWorkflow],
-        activities=[seed_raw_data, submit_emr_job, validate_output],
-        # Sync (blocking, boto3) activities run on this pool so they can
-        # never stall the async event loop.
-        activity_executor=ThreadPoolExecutor(max_workers=MAX_ACTIVITIES),
-        max_concurrent_activities=MAX_ACTIVITIES,
-        max_concurrent_workflow_tasks=8,
+        max_concurrent_workflow_tasks=16,
     )
-    print(f"ETL worker listening on task queue {TASK_QUEUE!r}", flush=True)
+    print(f"ETL workflow worker listening on task queue {TASK_QUEUE!r}", flush=True)
     await worker.run()
 
 

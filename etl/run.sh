@@ -19,13 +19,15 @@ if [ ! -d .venv ]; then
 fi
 ./.venv/bin/pip install -q -r requirements.txt
 
-# Light fleet (workflows + launcher/validation) and heavy fleet (the
-# Spark-spawning transform) poll separate queues — noisy-neighbor isolation.
+# Split fleets: workflow-only, light activities, and the heavy
+# (Spark-spawning, resource-tuned) activity fleet — noisy-neighbor isolation.
 ./.venv/bin/python worker.py &
-WORKER_PID=$!
+WF_PID=$!
+./.venv/bin/python light_worker.py &
+LIGHT_PID=$!
 ./.venv/bin/python heavy_worker.py &
 HEAVY_PID=$!
-trap 'kill $WORKER_PID $HEAVY_PID 2>/dev/null || true' EXIT
+trap 'kill $WF_PID $LIGHT_PID $HEAVY_PID 2>/dev/null || true' EXIT
 sleep 2
 
 ./.venv/bin/python starter.py

@@ -212,17 +212,19 @@ Without a catalog the same batch still runs (3 parallel transforms + 1 quarantin
 
 ### Worker architecture (noisy-neighbor isolation)
 
-Three fleets on three task queues, each sized for its workload class:
+Five split fleets across three task queues — workflow processing separated from activity execution, and workload classes separated from each other:
 
-| Queue | Runs | Slots | Why |
+| Fleet | Queue | Runs | Admission |
 |---|---|---|---|
-| `file-ingest` | parent workflow + byte/metadata activities | 16 | I/O-bound, cheap |
-| `etl-pipeline` | child workflows + launcher/validation activities | 16 | I/O-bound, cheap |
-| `etl-heavy` | `run_local_transform` (spawns a Spark JVM per slot) | **2** | each slot ≈ 1–2GB; slot count *is* the memory budget |
+| `ingest/worker.py` | `file-ingest` | parent workflow only | 16 workflow tasks |
+| `ingest/activity_worker.py` | `file-ingest` | byte/metadata activities | 16 slots, thread pool |
+| `worker.py` | `etl-pipeline` | child workflows only | 16 workflow tasks |
+| `light_worker.py` | `etl-pipeline` | launcher/validation activities | 16 slots, thread pool |
+| `heavy_worker.py` | `etl-heavy` | the Spark-spawning transform | **resource-based tuner** (target 80% mem / 90% CPU, bounded [1,2]) + **per-queue rate limit** (4 dispatches/s, server-enforced across the whole fleet) |
 
-The rules being followed: **queue segregation** (a misbehaving transform can only hurt other transforms — routing the one heavy activity to `etl-heavy` via `execute_activity(task_queue=...)`); **explicit slot limits** on every worker; **blocking code never on the event loop** (boto3-calling activities are sync `def` on a thread pool, or wrapped in `asyncio.to_thread`; only the genuinely-async subprocess activity is `async def`); **bounded retries** (`RetryPolicy(maximum_attempts=…)` on every activity) with **retryable vs non-retryable classification** — deterministic failures (column contract, dbt errors) raise non-retryable `ApplicationError`, transient deaths retry; **heartbeats + timeouts** bound the blast radius of a wedged activity. Workers never process data content: raw Spark/dbt output goes to a worker-local log file, and heartbeats/exceptions carry only counters and controlled aggregate payloads (no file data can leak into Temporal history — note that small `json` outputs *are* returned inline by design; use `parquet` outputs for anything sensitive).
+The rules being followed: **queue segregation** (a misbehaving transform can only hurt other transforms); **workflow/activity fleet split** (no activity, however badly behaved, can delay workflow progress decisions); **resource-based slot admission** on the heavy fleet (observed CPU/memory instead of a fixed count, with hard bounds); **per-queue rate limiting** (protects the shared substrate from a scaled-out fleet collectively over-launching); **blocking code never on the event loop** (boto3-calling activities are sync `def` on a thread pool, or wrapped in `asyncio.to_thread`; only the genuinely-async subprocess activity is `async def`); **bounded retries** (`RetryPolicy(maximum_attempts=…)` on every activity) with **retryable vs non-retryable classification** — deterministic failures (column contract, dbt errors) raise non-retryable `ApplicationError`, transient deaths retry; **heartbeats + timeouts** bound the blast radius of a wedged activity. Workers never process data content: raw Spark/dbt output goes to a worker-local log file, and heartbeats/exceptions carry only counters and controlled aggregate payloads (no file data can leak into Temporal history — note that small `json` outputs *are* returned inline by design; use `parquet` outputs for anything sensitive).
 
-Not demonstrated (next rungs at real scale): resource-based slot suppliers, split workflow-only vs activity-only fleets, per-queue rate limits, and KEDA-style autoscaling on task-queue backlog.
+Remaining scale rung not demonstrated: autoscaling the fleets on task-queue backlog / schedule-to-start latency (KEDA has native Temporal scalers).
 
 ### Following a batch in the UI
 

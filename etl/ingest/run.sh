@@ -67,16 +67,17 @@ for f in "$TMP_DIR"/*.csv; do
 done
 rm -rf "$TMP_DIR"
 
-# Three fleets on three queues: ingest (parent workflow + byte/metadata
-# activities), etl light (child workflows + launcher/validation), etl heavy
-# (the Spark-spawning transform, low slots) — noisy-neighbor isolation.
-./.venv/bin/python worker.py &
-ETL_WORKER_PID=$!
-./.venv/bin/python heavy_worker.py &
-HEAVY_WORKER_PID=$!
-./.venv/bin/python -m ingest.worker &
-INGEST_WORKER_PID=$!
-trap 'kill $ETL_WORKER_PID $HEAVY_WORKER_PID $INGEST_WORKER_PID 2>/dev/null || true' EXIT
+# Split fleets per queue — workflow-only workers separate from activity
+# workers, and the heavy (Spark-spawning, resource-tuned) fleet on its own
+# queue. No activity can delay workflow progress; heavy work can only hurt
+# heavy work.
+PIDS=()
+./.venv/bin/python worker.py &            PIDS+=($!)   # etl workflows
+./.venv/bin/python light_worker.py &      PIDS+=($!)   # etl light activities
+./.venv/bin/python heavy_worker.py &      PIDS+=($!)   # etl heavy activities
+./.venv/bin/python -m ingest.worker &     PIDS+=($!)   # ingest workflows
+./.venv/bin/python -m ingest.activity_worker & PIDS+=($!)  # ingest activities
+trap 'kill "${PIDS[@]}" 2>/dev/null || true' EXIT
 sleep 3
 
 ./.venv/bin/python -m ingest.starter
