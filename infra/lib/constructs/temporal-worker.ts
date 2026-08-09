@@ -32,16 +32,32 @@ export interface WorkerAutoscalingProps {
 }
 
 /**
- * Fargate task sizing matching the worker_platform size profiles — the same
- * profile string a fleet passes to `python -m worker_platform --profile`
- * sizes its container here, so the concurrency envelope and the compute
- * envelope always agree.
+ * Fargate task sizing matching the worker_platform profiles (5 sizes × 3
+ * shapes) — the same profile string a fleet passes to
+ * `python -m worker_platform --profile` sizes its container here, so the
+ * concurrency envelope and the compute envelope always agree.
+ * Shapes: general = balanced, `-cpu` = more vCPU per GB, `-mem` = more GB
+ * per vCPU (all combinations are valid Fargate cpu/memory pairings).
  */
-export const WORKER_PROFILE_SIZES: Record<string, { cpu: number; memoryLimitMiB: number }> = {
-  small: { cpu: 256, memoryLimitMiB: 512 },
-  medium: { cpu: 512, memoryLimitMiB: 1024 },
-  large: { cpu: 4096, memoryLimitMiB: 16384 },
-};
+export const WORKER_PROFILE_SIZES = {
+  'xsmall':     { cpu: 256,   memoryLimitMiB: 512 },
+  'xsmall-cpu': { cpu: 512,   memoryLimitMiB: 1024 },
+  'xsmall-mem': { cpu: 256,   memoryLimitMiB: 2048 },
+  'small':      { cpu: 512,   memoryLimitMiB: 1024 },
+  'small-cpu':  { cpu: 1024,  memoryLimitMiB: 2048 },
+  'small-mem':  { cpu: 512,   memoryLimitMiB: 4096 },
+  'medium':     { cpu: 1024,  memoryLimitMiB: 2048 },
+  'medium-cpu': { cpu: 2048,  memoryLimitMiB: 4096 },
+  'medium-mem': { cpu: 1024,  memoryLimitMiB: 8192 },
+  'large':      { cpu: 4096,  memoryLimitMiB: 16384 },
+  'large-cpu':  { cpu: 8192,  memoryLimitMiB: 16384 },
+  'large-mem':  { cpu: 4096,  memoryLimitMiB: 30720 },
+  'xlarge':     { cpu: 8192,  memoryLimitMiB: 32768 },
+  'xlarge-cpu': { cpu: 16384, memoryLimitMiB: 32768 },
+  'xlarge-mem': { cpu: 8192,  memoryLimitMiB: 61440 },
+} as const;
+
+export type WorkerProfileName = keyof typeof WORKER_PROFILE_SIZES;
 
 export interface TemporalWorkerServiceProps {
   readonly ecsCluster: ecs.ICluster;
@@ -61,11 +77,12 @@ export interface TemporalWorkerServiceProps {
   /** @default default */
   readonly temporalNamespace?: string;
   /**
-   * Size profile: sets Fargate cpu/memory to match the in-process
-   * worker_platform profile. Explicit cpu/memoryLimitMiB override it.
+   * Size profile (5 sizes × general/-cpu/-mem shapes): sets Fargate
+   * cpu/memory to match the in-process worker_platform profile. Explicit
+   * cpu/memoryLimitMiB override it.
    * @default small
    */
-  readonly profile?: 'small' | 'medium' | 'large';
+  readonly profile?: WorkerProfileName;
   /** @default from profile */
   readonly cpu?: number;
   /** @default from profile */
