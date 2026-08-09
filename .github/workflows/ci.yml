@@ -40,5 +40,5 @@ jobs:
       - run: python -m pytest etl/tests -q
 
   # Full-stack e2e (Temporal, LocalEmu, Iceberg, Spark Connect, SFTP + the
-  # real pipelines) lives in e2e.yml: PRs + pushes touching pipeline
-  # paths, and manual dispatch.
+  # real pipelines) lives in e2e.yml: pushes to main touching pipeline
+  # paths (single-branch strategy), and manual dispatch.

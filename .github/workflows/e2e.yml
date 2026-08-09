@@ -5,13 +5,6 @@ name: e2e
 # the real pipelines with assertions, exactly as run locally.
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "etl/**"
-      - "worker_platform/**"
-      - "examples/**"
-      - "docker-compose*.yml"
-      - ".github/workflows/e2e.yml"
   push:
     branches: [main]
     paths:
