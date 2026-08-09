@@ -1,14 +1,26 @@
 {
   "name": "transform-spec-2",
   "project_dir": "dbt",
-  "dbt_args": ["build", "--select", "tag:customers"],
+  "dbt_args": [
+    "build",
+    "--select",
+    "tag:customers"
+  ],
   "source_table": "raw.customers",
   "column_aliases": {
-    "customer": ["cust", "customer_name"],
-    "segment": ["seg", "tier"],
-    "region": ["rgn", "geo"]
+    "customer": [
+      "cust",
+      "customer_name"
+    ],
+    "segment": [
+      "seg",
+      "tier"
+    ],
+    "region": [
+      "rgn",
+      "geo"
+    ]
   },
-  "require_columns": ["customer", "segment", "region"],
   "outputs": [
     {
       "table": "analytics.dim_customers",

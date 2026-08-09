@@ -21,10 +21,23 @@ from dataclasses import dataclass, field
 
 import asyncssh
 import boto3
+import yaml
 from temporalio import activity
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPECS_DIR = os.path.join(os.path.dirname(HERE), "specs")
+CANONICAL_MODEL = os.path.join(
+    os.path.dirname(HERE), "dbt", "models", "staging", "schema.yml"
+)
+
+
+def canonical_columns(model_name: str) -> list:
+    """The landing gate derives from the canonical data model — one source
+    of truth for what a route's entity looks like."""
+    with open(CANONICAL_MODEL) as f:
+        doc = yaml.safe_load(f)
+    model = next(m for m in doc["models"] if m["name"] == model_name)
+    return [c["name"] for c in model.get("columns", [])]
 
 
 def _s3():
@@ -159,6 +172,9 @@ def resolve_transform_spec(cfg: IngestConfig, route: str, landed_key: str) -> di
         registry = json.load(f)
     entry = next(e for e in registry["routes"] if e["route"] == route)
     spec = _load_spec(entry["spec"])
+    # Landing gate = the canonical model's columns (stg_<table> by
+    # convention, or the spec's explicit "model").
+    staging_model = spec.get("model") or "stg_" + spec["source_table"].split(".")[-1]
     inputs = [
         {
             "key": landed_key,
@@ -167,7 +183,7 @@ def resolve_transform_spec(cfg: IngestConfig, route: str, landed_key: str) -> di
             "hygiene": {
                 "sanitize_headers": True,
                 "column_aliases": spec.get("column_aliases", {}),
-                "require_columns": spec.get("require_columns", []),
+                "require_columns": canonical_columns(staging_model),
             },
         }
     ]

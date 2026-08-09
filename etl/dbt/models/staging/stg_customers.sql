@@ -1,7 +1,3 @@
+-- Generated from the canonical model: see schema.yml + build_staging.
 {{ config(tags=['customers']) }}
-
-select
-    customer,
-    lower(trim(segment)) as segment,
-    lower(trim(region)) as region
-from {{ source('raw', 'customers') }}
+{{ build_staging('raw', 'customers') }}
