@@ -14,4 +14,5 @@ def catalog_from_env() -> dict | None:
 
 
 def spark_remote_from_env() -> str | None:
-    return os.environ.get("SPARK_CONNECT_URI")
+    # Empty string = explicit opt-out (in-process Spark fallback).
+    return os.environ.get("SPARK_CONNECT_URI") or None

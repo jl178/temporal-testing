@@ -17,18 +17,11 @@ async def main() -> None:
     # Demo instance: orders -> daily_revenue. Stateless by default; set
     # ICEBERG_REST_URI (e.g. http://localhost:8181, `nix run .#catalog-up`)
     # to materialize models as Iceberg tables in a persistent catalog.
-    catalog = None
-    if os.environ.get("ICEBERG_REST_URI"):
-        catalog = {
-            "type": "rest",
-            "name": "lake",
-            "uri": os.environ["ICEBERG_REST_URI"],
-            "warehouse": "s3://etl-data/warehouse",
-        }
+    from runtime_env import catalog_from_env, spark_remote_from_env
+
     job = DbtSparkJob(
-        catalog=catalog,
-        # Third execution mode: dbt in the activity, SQL on a remote cluster.
-        spark_remote=os.environ.get("SPARK_CONNECT_URI"),
+        catalog=catalog_from_env(),
+        spark_remote=spark_remote_from_env(),
     )
     result = await client.execute_workflow(
         EtlPipelineWorkflow.run,

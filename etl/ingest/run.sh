@@ -12,6 +12,19 @@ export AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://localhost:4566}"
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+# Default: prod shape — light workers, compute on the external Spark service.
+export SPARK_CONNECT_URI="${SPARK_CONNECT_URI-sc://localhost:15002}"
+
+if [ -n "$SPARK_CONNECT_URI" ]; then
+  if ! docker ps --format '{{.Names}}' | grep -q '^etl-spark-connect$'; then
+    docker compose -f "$(git rev-parse --show-toplevel)/docker-compose.spark.yml" up -d
+  fi
+  port="${SPARK_CONNECT_URI##*:}"
+  for _ in $(seq 1 60); do
+    if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then exec 3>&-; break; fi
+    sleep 5
+  done
+fi
 
 if ! curl -s -o /dev/null --max-time 5 "$AWS_ENDPOINT_URL"; then
   echo "ERROR: no AWS emulator at $AWS_ENDPOINT_URL (pip install localemu && localemu start)" >&2
@@ -74,7 +87,9 @@ rm -rf "$TMP_DIR"
 PIDS=()
 ./.venv/bin/python worker.py &            PIDS+=($!)   # etl workflows
 ./.venv/bin/python light_worker.py &      PIDS+=($!)   # etl light activities
-./.venv/bin/python heavy_worker.py &      PIDS+=($!)   # etl heavy activities
+if [ -z "$SPARK_CONNECT_URI" ]; then
+  ./.venv/bin/python heavy_worker.py &    PIDS+=($!)   # in-process fallback only
+fi
 ./.venv/bin/python -m ingest.worker &     PIDS+=($!)   # ingest workflows
 ./.venv/bin/python -m ingest.activity_worker & PIDS+=($!)  # ingest activities
 trap 'kill "${PIDS[@]}" 2>/dev/null || true' EXIT

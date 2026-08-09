@@ -8,10 +8,27 @@ export AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://localhost:4566}"
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+# Default: the prod shape — light workers, compute on the external Spark
+# service (locally a real Spark container; on AWS an EMR Serverless
+# session). SPARK_CONNECT_URI="" opts into the in-process fallback.
+export SPARK_CONNECT_URI="${SPARK_CONNECT_URI-sc://localhost:15002}"
 
 if ! curl -s -o /dev/null --max-time 5 "$AWS_ENDPOINT_URL"; then
   echo "ERROR: no AWS emulator at $AWS_ENDPOINT_URL (pip install localemu && localemu start)" >&2
   exit 1
+fi
+
+if [ -n "$SPARK_CONNECT_URI" ]; then
+  # The Spark service is part of the local stack; start it if needed.
+  if ! docker ps --format '{{.Names}}' | grep -q '^etl-spark-connect$'; then
+    (cd .. 2>/dev/null || true; docker compose -f "$(git rev-parse --show-toplevel)/docker-compose.spark.yml" up -d)
+  fi
+  echo "==> Waiting for Spark Connect server at ${SPARK_CONNECT_URI}"
+  port="${SPARK_CONNECT_URI##*:}"
+  for _ in $(seq 1 60); do
+    if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then exec 3>&-; break; fi
+    sleep 5
+  done
 fi
 
 if [ ! -d .venv ]; then
@@ -19,15 +36,16 @@ if [ ! -d .venv ]; then
 fi
 ./.venv/bin/pip install -q -r requirements.txt
 
-# Split fleets: workflow-only, light activities, and the heavy
-# (Spark-spawning, resource-tuned) activity fleet — noisy-neighbor isolation.
-./.venv/bin/python worker.py &
-WF_PID=$!
-./.venv/bin/python light_worker.py &
-LIGHT_PID=$!
-./.venv/bin/python heavy_worker.py &
-HEAVY_PID=$!
-trap 'kill $WF_PID $LIGHT_PID $HEAVY_PID 2>/dev/null || true' EXIT
+# Split fleets: workflow-only + light activities. The heavy fleet exists
+# only for the in-process fallback (SPARK_CONNECT_URI="") — in the default
+# prod-shaped mode all workers are light and Spark is an external service.
+PIDS=()
+./.venv/bin/python worker.py &       PIDS+=($!)
+./.venv/bin/python light_worker.py & PIDS+=($!)
+if [ -z "$SPARK_CONNECT_URI" ]; then
+  ./.venv/bin/python heavy_worker.py & PIDS+=($!)
+fi
+trap 'kill "${PIDS[@]}" 2>/dev/null || true' EXIT
 sleep 2
 
 ./.venv/bin/python starter.py

@@ -212,7 +212,7 @@ Without a catalog the same batch still runs (3 parallel transforms + 1 quarantin
 
 ### Worker architecture (noisy-neighbor isolation)
 
-**Production framing first:** in real Temporal deployments, workers are *all* light — pure orchestrators that submit work to purpose-built compute (EMR, Batch, Databricks, a warehouse) and heartbeat-poll it. The `etl-heavy` fleet below exists because local emulators can't execute EMR compute, so the transform runs as a worker subprocess *locally only*; on AWS you deploy only light fleets and the heavy queue disappears (the EMR submit path or a Spark Connect session carries the compute). Heavy worker fleets are legitimate in prod only when the activity *is* the compute (app-native work like transcoding or in-process ML that has no managed service).
+**The local default IS the prod shape:** all workers are light orchestrators, and Spark is an **external service** — locally a real Spark Connect server container (auto-started by the run scripts, `sc://localhost:15002`), on AWS an EMR Serverless session endpoint; the only thing that changes is the URI. The Iceberg catalog is configured **server-side** on that Spark service (exactly like Glue is enabled app-level on an EMR application) — job specs merely select it. The `etl-heavy` fleet only exists for the explicit opt-out (`SPARK_CONNECT_URI="" ./etl/run.sh` runs Spark in-process on the worker) and as a template for the one case where heavy worker fleets are legitimate in prod: when the activity *is* the compute (app-native work like transcoding or in-process ML with no managed service to offload to).
 
 Five split fleets across three task queues — workflow processing separated from activity execution, and workload classes separated from each other:
 

@@ -15,17 +15,12 @@ async def main() -> None:
         os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"),
         namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
     )
-    catalog = None
-    if os.environ.get("ICEBERG_REST_URI"):
-        catalog = {
-            "type": "rest",
-            "name": "lake",
-            "uri": os.environ["ICEBERG_REST_URI"],
-            "warehouse": "s3://etl-data/warehouse",
-        }
+    from runtime_env import catalog_from_env, spark_remote_from_env
+
+    catalog = catalog_from_env()
     cfg = IngestConfig(
         catalog=catalog,
-        spark_remote=os.environ.get("SPARK_CONNECT_URI"),
+        spark_remote=spark_remote_from_env(),
         # Cross-route join needs the per-route tables to persist across jobs.
         consolidation_spec="consolidation" if catalog else None,
     )

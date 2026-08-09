@@ -1,16 +1,19 @@
-# Optional: local Spark Connect server — the stand-in for an EMR Serverless
-# interactive session endpoint (emr-7.13+). In spark_remote mode, dbt runs
-# inside the Temporal activity and the SQL executes here.
+# Local Spark service — the DEFAULT compute plane for the ETL pipelines, so
+# the local architecture mirrors production: Temporal workers stay light and
+# submit SQL to an external Spark service (locally this container; on AWS an
+# EMR Serverless interactive session endpoint, emr-7.13+).
 #
-#   nix run .#spark-up
-#   SPARK_CONNECT_URI=sc://localhost:15002 ./etl/run.sh
+# The Iceberg REST catalog is configured SERVER-side here, exactly like Glue
+# is enabled app-level on an EMR Serverless application — job specs only
+# select it (defaultCatalog), they don't define it.
 #
-# Host networking so the server can reach the AWS emulator on localhost:4566
-# — the data plane is cluster<->S3 (S3A), never the worker. On AWS this role
-# is played by the EMR session's native S3 access; the --packages/--conf here
-# exist only because the stock image has no S3 connector wired up.
-# No volumes on purpose: the server's warehouse lives in the container, so a
-# recreate starts clean.
+#   nix run .#spark-up          # (auto-started by etl run scripts too)
+#   ./etl/run.sh                # uses sc://localhost:15002 by default
+#
+# Host networking so the server reaches the AWS emulator (:4566) and the
+# Iceberg REST catalog (:8181) on localhost; it serves on :15002.
+# No volumes on purpose: the server's scratch warehouse lives in the
+# container, so a recreate starts clean.
 name: etl-spark
 
 services:
@@ -23,13 +26,16 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_DEFAULT_REGION: us-east-1
+      AWS_REGION: us-east-1 # AWS SDK v2 (Iceberg S3FileIO) reads this name
     command:
       - /opt/spark/sbin/start-connect-server.sh
       - --conf
       # the image's spark user has no writable home for the ivy cache
       - spark.jars.ivy=/tmp/.ivy2
       - --packages
-      - org.apache.hadoop:hadoop-aws:3.4.2
+      - org.apache.hadoop:hadoop-aws:3.4.2,org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0
+      # S3A: the cluster reads/writes the emulator's S3 directly (on AWS,
+      # native S3 access comes from the execution role instead)
       - --conf
       - spark.hadoop.fs.s3a.endpoint=http://localhost:4566
       - --conf
@@ -42,4 +48,23 @@ services:
       - spark.hadoop.fs.s3a.endpoint.region=us-east-1
       - --conf
       - spark.hadoop.fs.s3a.connection.ssl.enabled=false
+      # Iceberg catalog, defined server-side (the Glue-on-the-EMR-app analog)
+      - --conf
+      - spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+      - --conf
+      - spark.sql.catalog.lake=org.apache.iceberg.spark.SparkCatalog
+      - --conf
+      - spark.sql.catalog.lake.type=rest
+      - --conf
+      - spark.sql.catalog.lake.uri=http://localhost:8181
+      - --conf
+      - spark.sql.catalog.lake.warehouse=s3://etl-data/warehouse
+      - --conf
+      - spark.sql.catalog.lake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+      - --conf
+      - spark.sql.catalog.lake.s3.endpoint=http://localhost:4566
+      - --conf
+      - spark.sql.catalog.lake.s3.path-style-access=true
+      - --conf
+      - spark.sql.catalog.lake.client.region=us-east-1
     restart: unless-stopped

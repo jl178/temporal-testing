@@ -5,12 +5,20 @@ from concurrent.futures import ThreadPoolExecutor
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from activities import seed_raw_data, submit_emr_job, validate_output
+from activities import (
+    run_local_transform,
+    seed_raw_data,
+    submit_emr_job,
+    validate_output,
+)
 from workflow import TASK_QUEUE
 
 # Activity-only light fleet: cheap I/O-bound activities (boto3 launchers,
-# validation). High slots are fine; blocking (sync) activities run on the
-# thread pool so nothing stalls an event loop.
+# validation, and the transform CLIENT — in spark_remote mode dbt just
+# compiles SQL and the external Spark service does the compute, so the
+# workflow routes it here; the in-process fallback routes to etl-heavy).
+# High slots are fine; blocking (sync) activities run on the thread pool so
+# nothing stalls an event loop.
 MAX_ACTIVITIES = 16
 
 
@@ -22,7 +30,7 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        activities=[seed_raw_data, submit_emr_job, validate_output],
+        activities=[seed_raw_data, submit_emr_job, validate_output, run_local_transform],
         activity_executor=ThreadPoolExecutor(max_workers=MAX_ACTIVITIES),
         max_concurrent_activities=MAX_ACTIVITIES,
     )

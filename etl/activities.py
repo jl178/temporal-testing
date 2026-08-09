@@ -232,19 +232,41 @@ async def run_local_transform(job: DbtSparkJob) -> dict:
     # malformed row quoted in an error). It goes to a worker-local log file,
     # never into heartbeats or exception messages — those carry only
     # counters and our own controlled ETL_RESULT payload (aggregates).
+    #
+    # Heartbeats are wall-clock driven, NOT output-driven: Spark goes quiet
+    # for minutes during long stages, and a missed heartbeat would make the
+    # server retry while this attempt's subprocess still runs — two
+    # concurrent writers corrupting the same tables.
     log_path = os.path.join(work_dir, "job.log")
     result: dict | None = None
     lines = 0
-    with open(log_path, "w") as log:
-        async for line in proc.stdout:
-            text = line.decode(errors="replace").rstrip()
-            log.write(text + "\n")
-            lines += 1
-            if lines % 25 == 0:
-                activity.heartbeat(f"transform running, {lines} log lines")
-            if text.startswith("ETL_RESULT "):
-                result = json.loads(text[len("ETL_RESULT "):])
-    rc = await proc.wait()
+
+    async def _pulse() -> None:
+        while True:
+            activity.heartbeat(f"transform {job.name} running, {lines} log lines")
+            await asyncio.sleep(15)
+
+    pulse = asyncio.create_task(_pulse())
+    try:
+        with open(log_path, "w") as log:
+            async for line in proc.stdout:
+                text = line.decode(errors="replace").rstrip()
+                log.write(text + "\n")
+                lines += 1
+                if text.startswith("ETL_RESULT "):
+                    result = json.loads(text[len("ETL_RESULT "):])
+        rc = await proc.wait()
+    except asyncio.CancelledError:
+        # Cancelled (timeout, workflow cancel): take the subprocess down
+        # with us so a retry never races a zombie attempt.
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except (TimeoutError, asyncio.TimeoutError):
+            proc.kill()
+        raise
+    finally:
+        pulse.cancel()
     if result is not None and not result.get("success"):
         # The job itself reported a deterministic failure (contract
         # violation, dbt error) — retrying cannot help.

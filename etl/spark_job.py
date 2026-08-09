@@ -254,12 +254,6 @@ def main() -> None:
     project_dir = resolve_project(spec["project"], work, s3)
 
     remote = bool(spec.get("spark_remote"))
-    if remote and spec.get("catalog"):
-        raise ValueError(
-            "spark_remote mode: configure the catalog on the server/application "
-            "(e.g. Glue on the EMR Serverless app), not in the job spec"
-        )
-
     if remote:
         # Spark Connect client: dbt-spark's `session` method also honors
         # SPARK_REMOTE, so dbt attaches to the same remote session.
@@ -268,10 +262,15 @@ def main() -> None:
     from pyspark.sql import SparkSession
 
     if remote:
-        # Session already exists server-side; S3 connectivity and any
-        # catalog are the server's configuration (EMR: execution role +
-        # Glue; locally: the compose file's --packages/--conf).
+        # Session already exists server-side; S3 connectivity and catalog
+        # DEFINITIONS are the server's configuration (EMR: execution role +
+        # Glue on the application; locally: the compose file's confs). The
+        # job only SELECTS the catalog for its session.
         spark = SparkSession.builder.getOrCreate()
+        if spec.get("catalog"):
+            spark.conf.set(
+                "spark.sql.defaultCatalog", spec["catalog"].get("name", "lake")
+            )
     else:
         if not spec.get("catalog"):
             # Stateless mode: the local warehouse is scratch space for this
