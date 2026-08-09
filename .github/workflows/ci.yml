@@ -39,7 +39,6 @@ jobs:
       - run: pip install -r etl/requirements-dev.txt
       - run: python -m pytest etl/tests -q
 
-  # The full e2e suites (Docker Compose Temporal stack, Spark Connect,
-  # emulator, dbt) run locally via ./etl/run.sh, ./etl/ingest/run.sh and
-  # nix run .#examples — too heavy for every push, wired for CI later via
-  # a nightly job with the nix devshell.
+  # Full-stack e2e (Temporal, LocalEmu, Iceberg, Spark Connect, SFTP + the
+  # real pipelines) lives in e2e.yml: nightly, on demand, and on pushes
+  # touching the pipeline paths.

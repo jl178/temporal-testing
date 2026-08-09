@@ -25,9 +25,11 @@ This repo demonstrates Temporal at three levels, each usable on its own:
    generates the normalization, an Iceberg catalog, and three execution
    modes that map 1:1 onto AWS.
 
-CI (`.github/workflows/ci.yml`) runs the CDK assertion tests + synth and
-the Python unit suite on every push; the heavier e2e suites run locally via
-the commands below.
+CI: `.github/workflows/ci.yml` runs the CDK assertion tests + synth and
+the Python unit suite on every push. `.github/workflows/e2e.yml` spins up
+the **full platform on the runner** (Temporal, LocalEmu, Iceberg catalog,
+Spark Connect, SFTP) and runs the real pipelines with assertions — nightly,
+on demand, and on pushes touching the pipeline.
 
 Quick start for each level:
 

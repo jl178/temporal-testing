@@ -1,0 +1,123 @@
+name: e2e
+
+# The full local platform, spun up on a runner: Temporal (compose), LocalEmu
+# (S3 + EMR API), Iceberg REST catalog, Spark Connect server, SFTP — then
+# the real pipelines with assertions, exactly as run locally.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *" # nightly
+  push:
+    branches: [main]
+    paths:
+      - "etl/**"
+      - "worker_platform/**"
+      - "examples/**"
+      - "docker-compose*.yml"
+      - ".github/workflows/e2e.yml"
+
+jobs:
+  etl-e2e:
+    name: ETL pipelines against the full local stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # LocalEmu needs Python >= 3.13 (its S3 provider); the ETL venv uses 3.12.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Start LocalEmu (S3 + EMR Serverless API on :4566)
+        run: |
+          python3.13 -m venv /tmp/localemu-venv
+          /tmp/localemu-venv/bin/pip -q install localemu
+          nohup /tmp/localemu-venv/bin/localemu start > /tmp/localemu.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf -o /dev/null http://localhost:4566 && break || sleep 2; done
+          curl -sf -o /dev/null http://localhost:4566 || { tail -50 /tmp/localemu.log; exit 1; }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-etl-${{ hashFiles('etl/requirements.txt') }}
+
+      - name: Temporal CLI
+        run: |
+          curl -sSf https://temporal.download/cli.sh | sh
+          echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
+
+      - name: Start the platform (Temporal + SFTP, Iceberg catalog, Spark Connect)
+        run: |
+          docker compose up -d
+          docker compose -f docker-compose.catalog.yml up -d
+          docker compose -f docker-compose.spark.yml up -d
+
+      - name: Wait for Temporal + Spark
+        run: |
+          for i in $(seq 1 60); do
+            temporal operator cluster health --address localhost:7233 2>/dev/null | grep -q SERVING && break || sleep 3
+          done
+          temporal operator cluster health --address localhost:7233 | grep SERVING
+          for i in $(seq 1 100); do
+            docker logs etl-spark-connect 2>&1 | grep -q 'Spark Connect server started' && break || sleep 5
+          done
+          docker logs etl-spark-connect 2>&1 | grep 'Spark Connect server started'
+
+      - name: Single transform (prod-shaped, Spark Connect)
+        run: ./etl/run.sh
+
+      - name: Complex batch + consolidation (gzip preprocess, aliases, quarantine, Iceberg)
+        run: ICEBERG_REST_URI=http://localhost:8181 ./etl/ingest/run.sh
+
+      - name: Platform demo (second tenant)
+        run: ./examples/platform-demo/run.sh
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/e2e-logs
+          docker ps -a > /tmp/e2e-logs/containers.txt || true
+          for c in temporal temporal-ui etl-spark-connect iceberg-rest-catalog etl-sftp; do
+            docker logs "$c" > "/tmp/e2e-logs/$c.log" 2>&1 || true
+          done
+          cp /tmp/localemu.log /tmp/e2e-logs/ 2>/dev/null || true
+          cp -r etl/.work /tmp/e2e-logs/work 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-logs
+          path: /tmp/e2e-logs
+
+  sdk-examples:
+    name: SDK examples (Python, Go, TypeScript, C#)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start Temporal (dev stack)
+        run: docker compose up -d
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: examples/go/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Wait for Temporal
+        run: |
+          for i in $(seq 1 60); do
+            docker exec temporal-admin-tools temporal operator cluster health --address temporal:7233 2>/dev/null | grep -q SERVING && break || sleep 3
+          done
+      - run: ./examples/python/run.sh
+      - run: ./examples/go/run.sh
+      - run: ./examples/typescript/run.sh
+      - run: ./examples/csharp/run.sh
