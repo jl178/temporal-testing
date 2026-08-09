@@ -126,11 +126,8 @@ language as the runner: the *same* profile string sets the in-process
 concurrency envelope (via the container command) and the Fargate task size
 (via the `profile` prop) — so the process and its box always agree.
 
-| Profile | Fargate task size |
-|---|---|
-| small | 0.25 vCPU / 512 MB |
-| medium | 0.5 vCPU / 1 GB |
-| large | 4 vCPU / 16 GB |
+Task sizes come from the profile matrix above (`WORKER_PROFILE_SIZES` —
+all 15 size×shape combinations are valid Fargate cpu/memory pairings).
 
 A complete fleet definition:
 
