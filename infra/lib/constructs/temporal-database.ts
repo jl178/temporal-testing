@@ -62,7 +62,9 @@ export class TemporalDatabase extends Construct {
       const secret = new rds.DatabaseSecret(this, 'Secret', { username: 'temporal' });
       this.cluster = new rds.DatabaseCluster(this, 'Cluster', {
         engine: rds.DatabaseClusterEngine.auroraPostgres({
-          version: rds.AuroraPostgresEngineVersion.VER_16_4,
+          // AWS retires old minors (16.4 no longer exists); pin a current
+          // one explicitly rather than trusting CDK enum freshness.
+          version: rds.AuroraPostgresEngineVersion.of('16.8', '16'),
         }),
         writer: rds.ClusterInstance.serverlessV2('Writer'),
         serverlessV2MinCapacity: props.minCapacity ?? 0.5,
