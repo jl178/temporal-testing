@@ -184,13 +184,17 @@ pattern for per-item pipelines.
 
 ## Worker topology (noisy-neighbor practice)
 
-| Fleet | Queue | Runs | Admission |
+Fleets are instances of the generic **worker platform** (see
+[workers.md](workers.md)): queue + size profile + registered code, run by
+`python -m worker_platform`:
+
+| Fleet | Queue | Profile | Registers |
 |---|---|---|---|
-| `ingest/worker.py` | `file-ingest` | parent workflow only | 16 wf tasks |
-| `ingest/activity_worker.py` | `file-ingest` | bytes + metadata activities | 16 slots, thread pool |
-| `worker.py` | `etl-pipeline` | child workflows only | 16 wf tasks |
-| `light_worker.py` | `etl-pipeline` | launchers, validation, transform *client* | 16 slots, thread pool |
-| `heavy_worker.py` | `etl-heavy` | in-process Spark fallback only | resource tuner [1,2] + 4/s queue cap |
+| ingest coordination | `file-ingest` | small | `FileIngestWorkflow` |
+| ingest activities | `file-ingest` | medium | bytes + metadata activities |
+| etl coordination | `etl-pipeline` | small | `EtlPipelineWorkflow` |
+| etl activities | `etl-pipeline` | medium | launchers, validation, transform *client* |
+| big-compute lane | `compute-large` | large | in-process Spark fallback only |
 
 Practices encoded: workflow/activity fleet split, queue segregation,
 blocking calls never on an event loop (sync activities on thread pools),

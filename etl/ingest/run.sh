@@ -86,14 +86,25 @@ rm -rf "$TMP_DIR"
 # workers, and the heavy (Spark-spawning, resource-tuned) fleet on its own
 # queue. No activity can delay workflow progress; heavy work can only hurt
 # heavy work.
+# Generic worker platform: each fleet = queue + size profile + code.
+# Clean up workers orphaned by interrupted earlier runs — a stale poller
+# racing a live one corrupts shared state.
+pkill -f "worker_platform --queue" 2>/dev/null || true
+sleep 1
+
 PIDS=()
-./.venv/bin/python worker.py &            PIDS+=($!)   # etl workflows
-./.venv/bin/python light_worker.py &      PIDS+=($!)   # etl light activities
+./.venv/bin/python -m worker_platform --queue etl-pipeline --profile small \
+  --workflows workflow &                                          PIDS+=($!)
+./.venv/bin/python -m worker_platform --queue etl-pipeline --profile medium \
+  --activities activities &                                       PIDS+=($!)
 if [ -z "$SPARK_CONNECT_URI" ]; then
-  ./.venv/bin/python heavy_worker.py &    PIDS+=($!)   # in-process fallback only
+  ./.venv/bin/python -m worker_platform --queue compute-large --profile large \
+    --activities activities:run_local_transform &                 PIDS+=($!)
 fi
-./.venv/bin/python -m ingest.worker &     PIDS+=($!)   # ingest workflows
-./.venv/bin/python -m ingest.activity_worker & PIDS+=($!)  # ingest activities
+./.venv/bin/python -m worker_platform --queue file-ingest --profile small \
+  --workflows ingest.workflow &                                   PIDS+=($!)
+./.venv/bin/python -m worker_platform --queue file-ingest --profile medium \
+  --activities ingest.activities &                                PIDS+=($!)
 trap 'kill "${PIDS[@]}" 2>/dev/null || true' EXIT
 sleep 3
 

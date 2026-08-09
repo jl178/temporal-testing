@@ -36,14 +36,23 @@ if [ ! -d .venv ]; then
 fi
 ./.venv/bin/pip install -q -r requirements.txt
 
-# Split fleets: workflow-only + light activities. The heavy fleet exists
-# only for the in-process fallback (SPARK_CONNECT_URI="") — in the default
-# prod-shaped mode all workers are light and Spark is an external service.
+# Generic worker platform: queue + size profile + code. Workflow
+# coordination is small; I/O-bound activities are medium; the big-compute
+# lane (large) only spins up for the in-process fallback — in the default
+# prod-shaped mode all fleets are light and Spark is an external service.
+# Clean up workers orphaned by interrupted earlier runs — a stale poller
+# racing a live one corrupts shared state.
+pkill -f "worker_platform --queue" 2>/dev/null || true
+sleep 1
+
 PIDS=()
-./.venv/bin/python worker.py &       PIDS+=($!)
-./.venv/bin/python light_worker.py & PIDS+=($!)
+./.venv/bin/python -m worker_platform --queue etl-pipeline --profile small \
+  --workflows workflow &                                          PIDS+=($!)
+./.venv/bin/python -m worker_platform --queue etl-pipeline --profile medium \
+  --activities activities &                                       PIDS+=($!)
 if [ -z "$SPARK_CONNECT_URI" ]; then
-  ./.venv/bin/python heavy_worker.py & PIDS+=($!)
+  ./.venv/bin/python -m worker_platform --queue compute-large --profile large \
+    --activities activities:run_local_transform &                 PIDS+=($!)
 fi
 trap 'kill "${PIDS[@]}" 2>/dev/null || true' EXIT
 sleep 2

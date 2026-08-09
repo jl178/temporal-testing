@@ -16,6 +16,7 @@ import csv
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -210,9 +211,11 @@ def submit_emr_job(job: DbtSparkJob) -> dict:
 @activity.defn
 async def run_local_transform(job: DbtSparkJob) -> dict:
     """Compute step: run the same spec through spark_job.py in this environment."""
-    # Per-job work dir: parallel jobs must not share scratch space
-    # (spec file, derby metastore, warehouse).
-    work_dir = os.path.join(HERE, ".work", job.name)
+    # Scratch space is unique per workflow RUN, not just per job name — a
+    # stale run's retried task must never collide with a live one (spec
+    # file, derby metastore, warehouse).
+    run_id = activity.info().workflow_run_id[:8]
+    work_dir = os.path.join(HERE, ".work", f"{job.name}-{run_id}")
     os.makedirs(work_dir, exist_ok=True)
     spec_path = os.path.join(work_dir, "spec.json")
     with open(spec_path, "w") as f:
@@ -276,7 +279,9 @@ async def run_local_transform(job: DbtSparkJob) -> dict:
         )
     if rc != 0 or result is None:
         # Died without a verdict (crash, OOM, lost connection) — transient.
+        # The work dir (incl. job.log) is kept for debugging.
         raise RuntimeError(f"transform died (rc={rc}, log: {log_path})")
+    shutil.rmtree(work_dir, ignore_errors=True)
     return result
 
 

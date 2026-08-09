@@ -13,11 +13,11 @@ with workflow.unsafe.imports_passed_through():
     )
 
 TASK_QUEUE = "etl-pipeline"
-# Noisy-neighbor isolation: the transform activity spawns a Spark JVM, so it
-# runs on its own queue polled by a dedicated low-slot worker fleet. A
-# misbehaving transform can then only hurt other transforms — the light
-# launcher/validation activities and workflow progress stay unaffected.
-HEAVY_TASK_QUEUE = "etl-heavy"
+# Noisy-neighbor isolation: in-process compute runs on the platform's
+# generic big-compute lane, polled by a `large`-profile fleet (resource-
+# tuned slots, queue rate cap). A misbehaving heavy activity can only hurt
+# other heavy activities — coordination and I/O fleets stay unaffected.
+HEAVY_TASK_QUEUE = "compute-large"
 
 LIGHT_RETRY = RetryPolicy(maximum_attempts=5)
 HEAVY_RETRY = RetryPolicy(maximum_attempts=3)
