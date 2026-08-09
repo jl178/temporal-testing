@@ -39,6 +39,53 @@ jobs:
       - run: pip install -r etl/requirements-dev.txt
       - run: python -m pytest etl/tests -q
 
+  images:
+    name: Build worker images (reference — not pushed anywhere)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # One image per codebase; every fleet runs its codebase's image with a
+      # different worker_platform command (queue + profile + registrations).
+      - name: ETL team worker image
+        run: docker build -f etl/Dockerfile -t temporal-testing/etl-worker:${{ github.sha }} .
+      - name: Billing tenant worker image
+        run: docker build -f examples/platform-demo/Dockerfile -t temporal-testing/billing-worker:${{ github.sha }} .
+      - name: Greeting app-worker image (prod compose stack's worker)
+        run: docker build -f examples/python/Dockerfile -t temporal-testing/greeting-worker:${{ github.sha }} examples/python
+
+      # ---------------------------------------------------------------
+      # Example ECS deploy (REFERENCE ONLY — intentionally commented out).
+      # Prereq: a GitHub OIDC deployer role in AWS (no long-lived keys).
+      #
+      # - uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/github-oidc-deployer
+      #     aws-region: us-east-1
+      # - uses: aws-actions/amazon-ecr-login@v2
+      #   id: ecr
+      # - name: Push the ETL worker image
+      #   run: |
+      #     docker tag temporal-testing/etl-worker:${{ github.sha }} \
+      #       ${{ steps.ecr.outputs.registry }}/etl-worker:${{ github.sha }}
+      #     docker push ${{ steps.ecr.outputs.registry }}/etl-worker:${{ github.sha }}
+      #
+      # Option A — CDK owns the fleet (preferred): the TemporalWorkerService
+      # construct's image tag comes from context, so a deploy pins the exact
+      # build (the queue buffers tasks during the rolling deploy):
+      # - name: Deploy fleets via CDK
+      #   working-directory: infra
+      #   run: |
+      #     npm ci
+      #     npx cdk deploy TemporalStack \
+      #       -c workerImageTag=${{ github.sha }} --require-approval never
+      #
+      # Option B — floating tag + forced roll (simpler, less traceable):
+      # - name: Roll the ECS service
+      #   run: |
+      #     aws ecs update-service --cluster <ecs-cluster> \
+      #       --service <etl-worker-service> --force-new-deployment
+      # ---------------------------------------------------------------
+
   # Full-stack e2e (Temporal, LocalEmu, Iceberg, Spark Connect, SFTP + the
   # real pipelines) lives in e2e.yml: pushes to main touching pipeline
   # paths (single-branch strategy), and manual dispatch.

@@ -178,6 +178,12 @@ concurrency envelope (via the container command) and the Fargate task size
 Task sizes come from the profile matrix above (`WORKER_PROFILE_SIZES` —
 all 15 size×shape combinations are valid Fargate cpu/memory pairings).
 
+The images themselves: `etl/Dockerfile` (the ETL team's codebase image)
+and `examples/platform-demo/Dockerfile` (the billing tenant's) — built in
+CI on every push for reference (not pushed to a registry); the ci workflow
+also carries a commented-out example of the real ECS deploy (OIDC role →
+ECR push → CDK deploy pinning the image tag, or a forced service roll).
+
 A complete fleet definition:
 
 ```ts
