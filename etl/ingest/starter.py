@@ -25,6 +25,7 @@ async def main() -> None:
         }
     cfg = IngestConfig(
         catalog=catalog,
+        spark_remote=os.environ.get("SPARK_CONNECT_URI"),
         # Cross-route join needs the per-route tables to persist across jobs.
         consolidation_spec="consolidation" if catalog else None,
     )
@@ -47,6 +48,8 @@ async def main() -> None:
 
     assert result["transformed"] == 3, result
     assert result["quarantined"] == 1, result
+    quarantined = next(r for r in result["results"] if r["status"] == "quarantined")
+    assert quarantined["file"] == "zz_broken.csv", quarantined
 
     orders_mart = by_route["orders"]["transform"]["validation"]["outputs"][0]
     assert orders_mart["rows"] == 3, orders_mart

@@ -5,6 +5,10 @@
 #   nix run .#spark-up
 #   SPARK_CONNECT_URI=sc://localhost:15002 ./etl/run.sh
 #
+# Host networking so the server can reach the AWS emulator on localhost:4566
+# — the data plane is cluster<->S3 (S3A), never the worker. On AWS this role
+# is played by the EMR session's native S3 access; the --packages/--conf here
+# exist only because the stock image has no S3 connector wired up.
 # No volumes on purpose: the server's warehouse lives in the container, so a
 # recreate starts clean.
 name: etl-spark
@@ -13,9 +17,29 @@ services:
   spark-connect:
     image: spark:4.1.1
     container_name: etl-spark-connect
+    network_mode: host
     environment:
       SPARK_NO_DAEMONIZE: "1"
-    command: /opt/spark/sbin/start-connect-server.sh
-    ports:
-      - "15002:15002"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    command:
+      - /opt/spark/sbin/start-connect-server.sh
+      - --conf
+      # the image's spark user has no writable home for the ivy cache
+      - spark.jars.ivy=/tmp/.ivy2
+      - --packages
+      - org.apache.hadoop:hadoop-aws:3.4.2
+      - --conf
+      - spark.hadoop.fs.s3a.endpoint=http://localhost:4566
+      - --conf
+      - spark.hadoop.fs.s3a.path.style.access=true
+      - --conf
+      - spark.hadoop.fs.s3a.access.key=test
+      - --conf
+      - spark.hadoop.fs.s3a.secret.key=test
+      - --conf
+      - spark.hadoop.fs.s3a.endpoint.region=us-east-1
+      - --conf
+      - spark.hadoop.fs.s3a.connection.ssl.enabled=false
     restart: unless-stopped

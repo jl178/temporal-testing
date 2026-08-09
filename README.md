@@ -210,6 +210,20 @@ ICEBERG_REST_URI=http://localhost:8181 ./etl/ingest/run.sh
 
 Without a catalog the same batch still runs (3 parallel transforms + 1 quarantine); the consolidation step is skipped because cross-job tables don't outlive their jobs.
 
+### Worker architecture (noisy-neighbor isolation)
+
+Three fleets on three task queues, each sized for its workload class:
+
+| Queue | Runs | Slots | Why |
+|---|---|---|---|
+| `file-ingest` | parent workflow + byte/metadata activities | 16 | I/O-bound, cheap |
+| `etl-pipeline` | child workflows + launcher/validation activities | 16 | I/O-bound, cheap |
+| `etl-heavy` | `run_local_transform` (spawns a Spark JVM per slot) | **2** | each slot ≈ 1–2GB; slot count *is* the memory budget |
+
+The rules being followed: **queue segregation** (a misbehaving transform can only hurt other transforms — routing the one heavy activity to `etl-heavy` via `execute_activity(task_queue=...)`); **explicit slot limits** on every worker; **blocking code never on the event loop** (boto3-calling activities are sync `def` on a thread pool, or wrapped in `asyncio.to_thread`; only the genuinely-async subprocess activity is `async def`); **bounded retries** (`RetryPolicy(maximum_attempts=…)` on every activity) with **retryable vs non-retryable classification** — deterministic failures (column contract, dbt errors) raise non-retryable `ApplicationError`, transient deaths retry; **heartbeats + timeouts** bound the blast radius of a wedged activity. Workers never process data content: raw Spark/dbt output goes to a worker-local log file, and heartbeats/exceptions carry only counters and controlled aggregate payloads (no file data can leak into Temporal history — note that small `json` outputs *are* returned inline by design; use `parquet` outputs for anything sensitive).
+
+Not demonstrated (next rungs at real scale): resource-based slot suppliers, split workflow-only vs activity-only fleets, per-queue rate limits, and KEDA-style autoscaling on task-queue backlog.
+
 ### Following a batch in the UI
 
 The workflow list is a query engine, not a tree — the production practice is to navigate with filters, not scroll. Every pipeline workflow is stamped with **custom search attributes** (`BatchId`, `Route`, `SourceFile` — registered idempotently by `run.sh` and the prod `temporal-namespace-setup` container), so in the UI search box (or `temporal workflow list --query`):

@@ -1,5 +1,7 @@
 {
-  "orders": "transform-spec-1",
-  "customers": "transform-spec-2",
-  "payments": "transform-spec-3"
+  "routes": [
+    { "pattern": "orders_*.csv", "route": "orders", "spec": "transform-spec-1" },
+    { "pattern": "customers_*.csv", "route": "customers", "spec": "transform-spec-2" },
+    { "pattern": "payments_*.csv", "route": "payments", "spec": "transform-spec-3" }
+  ]
 }

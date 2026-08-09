@@ -1,14 +1,15 @@
 import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from temporalio.client import Client
 from temporalio.worker import Worker
 
 from ingest.activities import (
-    classify_file,
+    classify_route,
     discover_sftp_files,
     land_sftp_file,
-    parse_file,
+    quarantine_file,
     resolve_consolidation_spec,
     resolve_transform_spec,
 )
@@ -27,11 +28,15 @@ async def main() -> None:
         activities=[
             discover_sftp_files,
             land_sftp_file,
-            parse_file,
-            classify_file,
+            classify_route,
+            quarantine_file,
             resolve_transform_spec,
             resolve_consolidation_spec,
         ],
+        # Sync (blocking) activities run on this pool, never the event loop.
+        activity_executor=ThreadPoolExecutor(max_workers=16),
+        max_concurrent_activities=16,
+        max_concurrent_workflow_tasks=8,
     )
     print(f"Ingest worker listening on task queue {TASK_QUEUE!r}", flush=True)
     await worker.run()

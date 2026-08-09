@@ -67,12 +67,16 @@ for f in "$TMP_DIR"/*.csv; do
 done
 rm -rf "$TMP_DIR"
 
-# Transform worker (child workflows) + ingest worker (parent workflow).
+# Three fleets on three queues: ingest (parent workflow + byte/metadata
+# activities), etl light (child workflows + launcher/validation), etl heavy
+# (the Spark-spawning transform, low slots) — noisy-neighbor isolation.
 ./.venv/bin/python worker.py &
 ETL_WORKER_PID=$!
+./.venv/bin/python heavy_worker.py &
+HEAVY_WORKER_PID=$!
 ./.venv/bin/python -m ingest.worker &
 INGEST_WORKER_PID=$!
-trap 'kill $ETL_WORKER_PID $INGEST_WORKER_PID 2>/dev/null || true' EXIT
+trap 'kill $ETL_WORKER_PID $HEAVY_WORKER_PID $INGEST_WORKER_PID 2>/dev/null || true' EXIT
 sleep 3
 
 ./.venv/bin/python -m ingest.starter

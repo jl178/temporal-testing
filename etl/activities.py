@@ -20,10 +20,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from dataclasses import dataclass, field
 
 import boto3
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -109,6 +111,7 @@ class DbtSparkJob:
                     "source": f"s3://{self.bucket}/{i['key']}",
                     "table": i["table"],
                     "format": i.get("format", "csv"),
+                    "hygiene": i.get("hygiene"),
                 }
                 for i in self.inputs
             ],
@@ -123,8 +126,15 @@ class DbtSparkJob:
         }
 
 
+# NOTE on sync vs async: boto3 is blocking, and a blocking call inside an
+# `async def` activity stalls the worker's entire event loop (every other
+# activity and workflow task on that worker). Blocking activities here are
+# therefore plain `def` — the SDK runs them on the worker's thread pool.
+# Only genuinely-async work (the transform subprocess) stays `async def`.
+
+
 @activity.defn
-async def seed_raw_data(job: DbtSparkJob) -> int:
+def seed_raw_data(job: DbtSparkJob) -> int:
     """Demo extract step: land the raw orders CSV in the S3 data lake."""
     s3 = _s3()
     try:
@@ -140,7 +150,7 @@ async def seed_raw_data(job: DbtSparkJob) -> int:
 
 
 @activity.defn
-async def submit_emr_job(job: DbtSparkJob) -> dict:
+def submit_emr_job(job: DbtSparkJob) -> dict:
     """Package the job (runner + dbt project + spec), submit to EMR
     Serverless, and poll to a terminal state."""
     emr = _emr()
@@ -194,7 +204,7 @@ async def submit_emr_job(job: DbtSparkJob) -> dict:
         activity.heartbeat(state)
         if state in terminal:
             return {"applicationId": app_id, "jobRunId": run_id, "state": state}
-        await asyncio.sleep(2)
+        time.sleep(2)
 
 
 @activity.defn
@@ -218,32 +228,71 @@ async def run_local_transform(job: DbtSparkJob) -> dict:
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
     assert proc.stdout is not None
+    # Log hygiene: raw Spark/dbt output can embed data fragments (e.g. a
+    # malformed row quoted in an error). It goes to a worker-local log file,
+    # never into heartbeats or exception messages — those carry only
+    # counters and our own controlled ETL_RESULT payload (aggregates).
+    log_path = os.path.join(work_dir, "job.log")
     result: dict | None = None
-    async for line in proc.stdout:
-        text = line.decode(errors="replace").rstrip()
-        activity.heartbeat(text[-120:])
-        if text.startswith("ETL_RESULT "):
-            result = json.loads(text[len("ETL_RESULT "):])
+    lines = 0
+    with open(log_path, "w") as log:
+        async for line in proc.stdout:
+            text = line.decode(errors="replace").rstrip()
+            log.write(text + "\n")
+            lines += 1
+            if lines % 25 == 0:
+                activity.heartbeat(f"transform running, {lines} log lines")
+            if text.startswith("ETL_RESULT "):
+                result = json.loads(text[len("ETL_RESULT "):])
     rc = await proc.wait()
-    if rc != 0 or result is None or not result.get("success"):
-        raise RuntimeError(f"transform failed (rc={rc}): {result}")
+    if result is not None and not result.get("success"):
+        # The job itself reported a deterministic failure (contract
+        # violation, dbt error) — retrying cannot help.
+        raise ApplicationError(
+            f"transform rejected the job: {result.get('error')} (full log: {log_path})",
+            non_retryable=True,
+        )
+    if rc != 0 or result is None:
+        # Died without a verdict (crash, OOM, lost connection) — transient.
+        raise RuntimeError(f"transform died (rc={rc}, log: {log_path})")
     return result
 
 
+MAX_INLINE_BYTES = 5 * 1024 * 1024
+
+
 @activity.defn
-async def validate_output(job: DbtSparkJob) -> dict:
-    """Every declared output landed in S3 and is non-empty; json outputs are
-    returned inline (they are small marts) so callers can assert on content."""
+def validate_output(job: DbtSparkJob) -> dict:
+    """Every declared output landed in S3 and is non-empty — verified from
+    metadata, never by pulling large data through the worker. Small json
+    outputs (capped marts) are returned inline so callers can assert on
+    content; parquet outputs are distributed part-file prefixes and are
+    validated by listing."""
     s3 = _s3()
     results = []
     for out in job.outputs:
-        obj = s3.get_object(Bucket=job.bucket, Key=out["key"])
-        body = obj["Body"].read()
-        if not body:
+        fmt = out.get("format", "json")
+        if fmt == "parquet":
+            resp = s3.list_objects_v2(Bucket=job.bucket, Prefix=out["key"])
+            objects = [o for o in resp.get("Contents", []) if o["Size"] > 0]
+            if not any("part-" in o["Key"] for o in objects):
+                raise RuntimeError(f"output prefix {out['key']} has no part files")
+            results.append(
+                {
+                    "key": out["key"],
+                    "objects": len(objects),
+                    "bytes": sum(o["Size"] for o in objects),
+                }
+            )
+            continue
+        size = s3.head_object(Bucket=job.bucket, Key=out["key"])["ContentLength"]
+        if size == 0:
             raise RuntimeError(f"output {out['key']} is empty")
-        entry: dict = {"key": out["key"], "bytes": len(body)}
-        if out.get("format", "json") == "json":
-            rows = json.loads(body)
+        entry: dict = {"key": out["key"], "bytes": size}
+        if size <= MAX_INLINE_BYTES:
+            rows = json.loads(
+                s3.get_object(Bucket=job.bucket, Key=out["key"])["Body"].read()
+            )
             if not rows:
                 raise RuntimeError(f"output {out['key']} has no rows")
             entry["rows"] = len(rows)

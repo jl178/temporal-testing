@@ -3,7 +3,7 @@
   "project_dir": "dbt",
   "dbt_args": ["build", "--select", "tag:payments"],
   "source_table": "raw.payments",
-  "source_format": "parquet",
+  "require_columns": ["payment_id", "order_id", "paid_amount", "paid_date"],
   "outputs": [
     {
       "table": "analytics.fct_payments",

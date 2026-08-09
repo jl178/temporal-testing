@@ -35,14 +35,17 @@ Execution modes:
     here, the remote cluster executes it. Locally that's a spark-connect
     container; on AWS it's an EMR Serverless interactive session endpoint
     (emr-7.13+), per https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/tutorials-dbt.html
-    In this mode inputs upload via createDataFrame and outputs return via
-    collect/toPandas (the remote FS is not this process's FS), and the
-    catalog must be configured server-side (on the EMR application).
+    The catalog and S3 connectivity are configured server-side in this mode
+    (on the EMR application; the local compose file for the dev server).
+
+Data plane: the CLUSTER moves all data — inputs are read from object storage
+by executors in parallel, parquet outputs are written back the same way.
+Nothing large ever transits this process; json outputs are an explicitly
+capped small-results path so marts can be asserted inline.
 
 Prints a final `ETL_RESULT {json}` line for the calling process to parse.
 """
 import argparse
-import glob
 import json
 import os
 import shutil
@@ -85,17 +88,48 @@ ICEBERG_PACKAGES = (
     "org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,"
     "org.apache.iceberg:iceberg-aws-bundle:1.11.0"
 )
+# Matches the hadoop-client jars shipped with pyspark 4.1 / spark:4.1.1.
+HADOOP_AWS_PACKAGE = "org.apache.hadoop:hadoop-aws:3.4.2"
+
+# collect()-to-JSON is intentionally a small-results path (assertable marts);
+# big outputs must use parquet, which the cluster writes straight to S3.
+MAX_INLINE_ROWS = 100_000
+
+
+def data_uri(uri: str) -> str:
+    """The cluster reads/writes object storage directly. Against an emulator
+    (AWS_ENDPOINT_URL set) that means the s3a:// connector; on AWS the
+    native s3:// committer."""
+    if os.environ.get("AWS_ENDPOINT_URL") and uri.startswith("s3://"):
+        return "s3a://" + uri[len("s3://"):]
+    return uri
+
+
+def configure_s3a(builder):
+    """S3A connector for local/emulator runs. On AWS (no AWS_ENDPOINT_URL)
+    this is a no-op — EMR provides native S3 access via the execution role."""
+    endpoint = os.environ.get("AWS_ENDPOINT_URL")
+    if not endpoint:
+        return builder
+    return (
+        builder.config("spark.hadoop.fs.s3a.endpoint", endpoint)
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")
+        .config("spark.hadoop.fs.s3a.access.key", os.environ.get("AWS_ACCESS_KEY_ID", "test"))
+        .config("spark.hadoop.fs.s3a.secret.key", os.environ.get("AWS_SECRET_ACCESS_KEY", "test"))
+        .config("spark.hadoop.fs.s3a.endpoint.region", os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+    )
 
 
 def configure_catalog(builder, catalog: dict | None):
     """No catalog -> Spark's ephemeral in-memory catalog (the default).
-    With one -> Iceberg tables in a persistent external catalog."""
+    With one -> Iceberg tables in a persistent external catalog.
+    (Jar packages are assembled by main() so S3A and Iceberg can combine.)"""
     if not catalog:
         return builder
     name = catalog.get("name", "lake")
     builder = (
-        builder.config("spark.jars.packages", catalog.get("packages", ICEBERG_PACKAGES))
-        .config(
+        builder.config(
             "spark.sql.extensions",
             "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
         )
@@ -128,52 +162,72 @@ def configure_catalog(builder, catalog: dict | None):
     return builder
 
 
-def load_inputs(spec: dict, spark, work: str, s3, remote: bool) -> None:
-    for inp in spec.get("inputs", []):
-        bucket, key = parse_s3(inp["source"])
-        local = os.path.join(work, "inputs", key.replace("/", "_"))
-        os.makedirs(os.path.dirname(local), exist_ok=True)
-        s3.download_file(bucket, key, local)
-        fmt = inp.get("format", "csv")
-        if remote:
-            # A Spark Connect server can't see this process's filesystem —
-            # ship the rows over the wire instead.
-            import pandas as pd
+def sanitize_header(name: str) -> str:
+    """Mechanical header cleanup so columns are SQL-addressable:
+    'Order ID' -> 'order_id'. Semantic renames belong in dbt staging."""
+    import re
 
-            pdf = pd.read_csv(local, dtype=str) if fmt == "csv" else pd.read_parquet(local)
-            df = spark.createDataFrame(pdf)
-        elif fmt == "csv":
-            df = spark.read.option("header", True).csv(local)
+    return re.sub(r"[^0-9a-zA-Z]+", "_", name.strip().lower()).strip("_")
+
+
+def load_inputs(spec: dict, spark) -> None:
+    """The cluster reads inputs straight from object storage — no data ever
+    transits this process (executors read splits in parallel). File hygiene
+    happens here too, in Spark: permissive all-strings read, header
+    sanitization, and a column contract that fails fast on files that are
+    not what they claim to be."""
+    for inp in spec.get("inputs", []):
+        uri = data_uri(inp["source"])
+        fmt = inp.get("format", "csv")
+        if fmt == "csv":
+            df = (
+                spark.read.option("header", True)
+                .option("mode", "PERMISSIVE")
+                .csv(uri)
+            )
         else:
-            df = spark.read.format(fmt).load(local)
+            df = spark.read.format(fmt).load(uri)
+
+        hygiene = inp.get("hygiene") or {}
+        if hygiene.get("sanitize_headers"):
+            df = df.toDF(*[sanitize_header(c) for c in df.columns])
+        required = hygiene.get("require_columns") or []
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"input {inp['source']} does not satisfy its column contract; "
+                f"missing {missing} (found {df.columns})"
+            )
+
         table = inp["table"]
         if "." in table:
             spark.sql(f"create database if not exists {table.split('.')[0]}")
         df.write.mode("overwrite").saveAsTable(table)
 
 
-def export_outputs(spec: dict, spark, work: str, s3, remote: bool) -> list[dict]:
+def export_outputs(spec: dict, spark, work: str, s3) -> list[dict]:
     results = []
     for i, out in enumerate(spec.get("outputs", [])):
         df = spark.table(out["table"])
         rows = df.count()
         fmt = out.get("format", "json")
-        bucket, key = parse_s3(out["destination"])
         if fmt == "json":
+            # Explicitly a small-results path: assertable marts returned
+            # inline. Anything bigger must use parquet.
+            if rows > MAX_INLINE_ROWS:
+                raise ValueError(
+                    f"{out['table']} has {rows} rows; json outputs are capped at "
+                    f"{MAX_INLINE_ROWS} (use format=parquet for large outputs)"
+                )
+            bucket, key = parse_s3(out["destination"])
             local = os.path.join(work, f"output_{i}.json")
             with open(local, "w") as f:
                 json.dump([r.asDict() for r in df.collect()], f, default=str)
             s3.upload_file(local, bucket, key)
         elif fmt == "parquet":
-            local = os.path.join(work, f"output_{i}.parquet")
-            if remote:
-                # Pull the result over the wire; the server FS is not ours.
-                df.toPandas().to_parquet(local, index=False)
-            else:
-                tmp = os.path.join(work, f"output_{i}_parquet")
-                df.coalesce(1).write.mode("overwrite").parquet(tmp)
-                local = glob.glob(os.path.join(tmp, "part-*.parquet"))[0]
-            s3.upload_file(local, bucket, key)
+            # Distributed write: the cluster writes part files directly to
+            # the destination prefix — nothing transits this process.
+            df.write.mode("overwrite").parquet(data_uri(out["destination"]))
         else:
             raise ValueError(f"unsupported output format: {fmt}")
         results.append({"table": out["table"], "destination": out["destination"], "rows": rows})
@@ -214,6 +268,9 @@ def main() -> None:
     from pyspark.sql import SparkSession
 
     if remote:
+        # Session already exists server-side; S3 connectivity and any
+        # catalog are the server's configuration (EMR: execution role +
+        # Glue; locally: the compose file's --packages/--conf).
         spark = SparkSession.builder.getOrCreate()
     else:
         if not spec.get("catalog"):
@@ -227,12 +284,27 @@ def main() -> None:
             .config("spark.driver.extraJavaOptions", f"-Dderby.system.home={work}")
             .config("spark.ui.enabled", "false")
         )
+        packages = []
+        if os.environ.get("AWS_ENDPOINT_URL"):
+            # Emulator runs need the S3A connector; on AWS the platform
+            # provides native S3 access, no extra jars.
+            packages.append(HADOOP_AWS_PACKAGE)
+            builder = configure_s3a(builder)
+        if spec.get("catalog"):
+            packages.append(spec["catalog"].get("packages", ICEBERG_PACKAGES))
+        if packages:
+            builder = builder.config("spark.jars.packages", ",".join(packages))
         spark = configure_catalog(builder, spec.get("catalog")).getOrCreate()
 
     # dbt models follow the catalog choice (dbt_project.yml reads this).
     os.environ["DBT_FILE_FORMAT"] = "iceberg" if spec.get("catalog") else "parquet"
 
-    load_inputs(spec, spark, work, s3, remote)
+    try:
+        load_inputs(spec, spark)
+    except ValueError as exc:
+        # Deterministic rejection (e.g. column contract) — not retryable.
+        print("ETL_RESULT " + json.dumps({"success": False, "error": str(exc)}))
+        sys.exit(1)
 
     # dbt-spark `session` method reuses this process's active SparkSession.
     from dbt.cli.main import dbtRunner
@@ -246,7 +318,7 @@ def main() -> None:
         print("ETL_RESULT " + json.dumps({"success": False, "error": "dbt invocation failed"}))
         sys.exit(1)
 
-    outputs = export_outputs(spec, spark, work, s3, remote)
+    outputs = export_outputs(spec, spark, work, s3)
     print("ETL_RESULT " + json.dumps({"success": True, "outputs": outputs}))
     spark.stop()
 
