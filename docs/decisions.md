@@ -99,3 +99,19 @@ ideally accounts — are the sacred boundary.
 unpushed) on every push; `e2e` (the full platform on a runner, real
 pipelines asserted) on pipeline-path pushes + dispatch. Single-branch on
 main, change-driven only — no cron CI.
+
+**D17 — Readable physical names where safe; tags everywhere.** CDK's
+default names (`TemporalStack-ci-E2eWorkerServiceB1CFC9EB-WqL1…`) exist
+for good reasons — generated names never collide across parallel deploys
+and let CloudFormation replace-on-update. We keep those properties while
+restoring legibility: physical names are set explicitly *prefixed with
+the stack name* (ECS cluster = stack name; services/task families =
+`<stack>-temporal-server`, `<stack>-<WorkerId>`; log groups =
+`/ecs/<stack>/<component>`), so the `-ci` suffix isolation still holds.
+Load balancers keep generated names (32-char limit makes prefixing
+fragile). Everything taggable carries `project` + `deployment` tags, ECS
+services propagate tags to running tasks, and CloudFormation's own
+`aws:cloudformation:stack-name` tag covers the rest — console filtering
+by tag beats name archaeology. Trade-off owned: renaming a named resource
+forces replacement, acceptable for an example platform; teams pinning
+prod stacks should treat physical names as frozen once deployed.

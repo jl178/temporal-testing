@@ -1,6 +1,7 @@
 import {
   Duration,
   RemovalPolicy,
+  Stack,
   aws_applicationautoscaling as appscaling,
   aws_cloudwatch as cloudwatch,
   aws_ec2 as ec2,
@@ -115,13 +116,19 @@ export class TemporalWorkerService extends Construct {
     super(scope, id);
 
     const namespace = props.temporalNamespace ?? 'default';
+    // Readable physical names: <stack>-<construct id> keeps the console
+    // legible while the stack-name prefix preserves the net-new guarantee
+    // (suffixed ephemeral stacks can never collide with each other).
+    const name = `${Stack.of(this).stackName}-${this.node.id}`;
 
     const logGroup = new logs.LogGroup(this, 'Logs', {
+      logGroupName: `/ecs/${Stack.of(this).stackName}/${this.node.id}`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: RemovalPolicy.DESTROY,
     });
     const size = WORKER_PROFILE_SIZES[props.profile ?? 'small'];
     const taskDefinition = new ecs.FargateTaskDefinition(this, 'Task', {
+      family: name,
       cpu: props.cpu ?? size.cpu,
       memoryLimitMiB: props.memoryLimitMiB ?? size.memoryLimitMiB,
     });
@@ -138,10 +145,13 @@ export class TemporalWorkerService extends Construct {
     });
 
     this.service = new ecs.FargateService(this, 'Service', {
+      serviceName: name,
       cluster: props.ecsCluster,
       taskDefinition,
       desiredCount: props.desiredCount ?? 1,
       minHealthyPercent: 0,
+      enableECSManagedTags: true,
+      propagateTags: ecs.PropagatedTagSource.SERVICE,
     });
 
     if (props.autoscaling) {

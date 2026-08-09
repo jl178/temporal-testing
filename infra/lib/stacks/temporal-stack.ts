@@ -126,10 +126,12 @@ export class TemporalStack extends Stack {
       worker.allowGrpcTo(this.temporal.serverService);
 
       const starterLogs = new logs.LogGroup(this, 'E2eStarterLogs', {
+        logGroupName: `/ecs/${this.stackName}/e2e-starter`,
         retention: logs.RetentionDays.ONE_DAY,
         removalPolicy: RemovalPolicy.DESTROY,
       });
       const starterTask = new ecs.FargateTaskDefinition(this, 'E2eStarterTask', {
+        family: `${this.stackName}-e2e-starter`,
         cpu: 256,
         memoryLimitMiB: 512,
       });

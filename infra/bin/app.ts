@@ -35,6 +35,12 @@ const natGateways = str('natGateways');
 const suffix = str('stackSuffix');
 const name = (base: string) => (suffix ? `${base}-${suffix}` : base);
 
+// Console legibility: every taggable resource answers "what owns this"
+// via tags even where physical names stay CloudFormation-generated
+// (load balancers etc. — see docs/decisions.md on naming).
+cdk.Tags.of(app).add('project', 'temporal-platform');
+cdk.Tags.of(app).add('deployment', suffix ?? 'default');
+
 const networkStack = new NetworkStack(app, name('TemporalNetworkStack'), {
   env,
   vpcId,

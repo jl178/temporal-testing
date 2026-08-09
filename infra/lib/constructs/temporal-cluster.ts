@@ -1,6 +1,7 @@
 import {
   Duration,
   RemovalPolicy,
+  Stack,
   aws_ec2 as ec2,
   aws_ecs as ecs,
   aws_ecs_patterns as ecs_patterns,
@@ -62,8 +63,12 @@ export class TemporalCluster extends Construct {
   constructor(scope: Construct, id: string, props: TemporalClusterProps) {
     super(scope, id);
 
+    // Readable physical names, prefixed with the stack name so suffixed
+    // ephemeral deploys stay collision-free (see docs/decisions.md).
+    const stackName = Stack.of(this).stackName;
     this.ecsCluster =
-      props.ecsCluster ?? new ecs.Cluster(this, 'EcsCluster', { vpc: props.vpc });
+      props.ecsCluster ??
+      new ecs.Cluster(this, 'EcsCluster', { vpc: props.vpc, clusterName: stackName });
 
     const useServiceDiscovery = props.serviceDiscovery ?? true;
     const namespaceName = props.cloudMapNamespaceName ?? 'temporal.local';
@@ -76,10 +81,12 @@ export class TemporalCluster extends Construct {
 
     // --- Temporal server ---
     const serverLogs = new logs.LogGroup(this, 'ServerLogs', {
+      logGroupName: `/ecs/${stackName}/temporal-server`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: RemovalPolicy.DESTROY,
     });
     const serverTask = new ecs.FargateTaskDefinition(this, 'ServerTask', {
+      family: `${stackName}-temporal-server`,
       cpu: props.serverCpu ?? 1024,
       memoryLimitMiB: props.serverMemoryMiB ?? 2048,
     });
@@ -106,11 +113,14 @@ export class TemporalCluster extends Construct {
     });
 
     this.serverService = new ecs.FargateService(this, 'ServerService', {
+      serviceName: `${stackName}-temporal-server`,
       cluster: this.ecsCluster,
       taskDefinition: serverTask,
       desiredCount: 1,
       minHealthyPercent: 0,
       circuitBreaker: { rollback: true },
+      enableECSManagedTags: true,
+      propagateTags: ecs.PropagatedTagSource.SERVICE,
       cloudMapOptions: namespace
         ? {
             cloudMapNamespace: namespace,
@@ -158,6 +168,7 @@ export class TemporalCluster extends Construct {
 
     // --- Temporal web UI ---
     this.uiService = new ecs_patterns.ApplicationLoadBalancedFargateService(this, 'Ui', {
+      serviceName: `${stackName}-temporal-ui`,
       cluster: this.ecsCluster,
       cpu: 256,
       memoryLimitMiB: 512,
