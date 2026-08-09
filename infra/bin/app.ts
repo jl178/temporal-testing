@@ -30,13 +30,18 @@ const hostedZoneId = str('hostedZoneId');
 const zoneName = str('zoneName');
 
 const natGateways = str('natGateways');
-const networkStack = new NetworkStack(app, 'TemporalNetworkStack', {
+// Optional suffix so ephemeral deploys (CI validation) are guaranteed
+// net-new and can never collide with or update existing stacks.
+const suffix = str('stackSuffix');
+const name = (base: string) => (suffix ? `${base}-${suffix}` : base);
+
+const networkStack = new NetworkStack(app, name('TemporalNetworkStack'), {
   env,
   vpcId,
   natGateways: natGateways !== undefined ? Number(natGateways) : undefined,
 });
 
-new TemporalStack(app, 'TemporalStack', {
+new TemporalStack(app, name('TemporalStack'), {
   env,
   vpc: networkStack.vpc,
   ecsClusterName: str('ecsClusterName'),

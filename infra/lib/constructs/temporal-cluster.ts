@@ -90,6 +90,13 @@ export class TemporalCluster extends Construct {
         DB: 'postgres12',
         DB_PORT: String(props.database.port),
         POSTGRES_SEEDS: props.database.endpointAddress,
+        // Aurora always offers server TLS, and newer Postgres defaults can
+        // force it; connect over TLS without pinning the RDS CA.
+        POSTGRES_TLS_ENABLED: 'true',
+        POSTGRES_TLS_DISABLE_HOST_VERIFICATION: 'true',
+        SQL_TLS_ENABLED: 'true',
+        SQL_HOST_VERIFICATION: 'false',
+        SQL_TLS_DISABLE_HOST_VERIFICATION: 'true',
       },
       secrets: {
         POSTGRES_USER: ecs.Secret.fromSecretsManager(props.database.secret, 'username'),
