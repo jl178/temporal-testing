@@ -167,6 +167,13 @@ export class TemporalCluster extends Construct {
     this.httpApiEndpoint = `http://${this.grpcLoadBalancer.loadBalancerDnsName}:${HTTP_API_PORT}`;
 
     // --- Temporal web UI ---
+    // Explicit log group: the ecs_patterns default creates one with RETAIN,
+    // which quietly outlives every stack delete (docs/gotchas.md).
+    const uiLogs = new logs.LogGroup(this, 'UiLogs', {
+      logGroupName: `/ecs/${stackName}/temporal-ui`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
     this.uiService = new ecs_patterns.ApplicationLoadBalancedFargateService(this, 'Ui', {
       serviceName: `${stackName}-temporal-ui`,
       cluster: this.ecsCluster,
@@ -179,6 +186,7 @@ export class TemporalCluster extends Construct {
       taskImageOptions: {
         image: ecs.ContainerImage.fromRegistry(props.uiImage ?? DEFAULT_UI_IMAGE),
         containerPort: UI_PORT,
+        logDriver: ecs.LogDrivers.awsLogs({ streamPrefix: 'temporal-ui', logGroup: uiLogs }),
         environment: {
           TEMPORAL_ADDRESS: useServiceDiscovery
             ? `temporal-frontend.${namespaceName}:${GRPC_PORT}`
