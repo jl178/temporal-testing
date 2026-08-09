@@ -134,7 +134,17 @@ jobs:
           # Remove the isolated bootstrap stack + its qualified assets
           aws cloudformation delete-stack --stack-name "$TOOLKIT_STACK" || true
           aws cloudformation wait stack-delete-complete --stack-name "$TOOLKIT_STACK" || true
-          aws s3 rb "s3://cdk-$QUALIFIER-assets-$ACCOUNT-us-east-1" --force || true
+          # Bootstrap buckets are VERSIONED: purge versions + delete markers
+          # before rb (plain `s3 rb --force` cannot remove them).
+          B="cdk-$QUALIFIER-assets-$ACCOUNT-us-east-1"
+          for q in "Versions" "DeleteMarkers"; do
+            aws s3api list-object-versions --bucket "$B" --output json \
+              --query "{Objects: ${q}[].{Key:Key,VersionId:VersionId}}" > /tmp/purge.json 2>/dev/null || continue
+            if [ "$(jq '.Objects | length' /tmp/purge.json 2>/dev/null)" != "0" ] && [ "$(jq '.Objects' /tmp/purge.json)" != "null" ]; then
+              aws s3api delete-objects --bucket "$B" --delete file:///tmp/purge.json > /dev/null || true
+            fi
+          done
+          aws s3 rb "s3://$B" || true
           aws ecr delete-repository --repository-name "cdk-$QUALIFIER-container-assets-$ACCOUNT-us-east-1" --force || true
           # Remove the run-scoped CloudFormation grant
           aws iam delete-user-policy --user-name cicd_user \

@@ -23,3 +23,6 @@ Symptom → cause → fix. Check here FIRST when something fails strangely.
 | Tuner + fixed slot counts rejected by SDK | a resource tuner owns *all* slot types | when tuner is on, configure workflow slots through the tuner too |
 | dbt `build` fails on other routes' models | plain `dbt build` builds every model; unselected sources don't exist in this job | always `--select tag:<route>` per spec |
 | gz drop never discovered | SFTP pattern `*.csv` missed `.csv.gz` | pattern `*.csv*`; route on the *decompressed* name |
+| Aurora deploy: `Cannot find version X for aurora-postgresql` | AWS retires old engine minors; CDK enum constants go stale | pin a live version via `AuroraPostgresEngineVersion.of(...)`; check `aws rds describe-db-engine-versions` — a lesson only a REAL deploy catches |
+| Fresh IAM grant works for one API call, 403s the next | IAM eventual consistency across service frontends | 30s propagation wait + retry loop (with partial-stack cleanup) around the first consumer |
+| CDK bootstrap bucket survives `aws s3 rb --force` | bootstrap buckets are versioned; rb can't purge versions/delete markers | delete Versions + DeleteMarkers via `s3api delete-objects`, then rb |
