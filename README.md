@@ -1,5 +1,7 @@
 # temporal-testing
 
+**Docs:** [documentation index](docs/README.md) · [architecture (local ≙ prod)](docs/architecture.md) · [runnable examples](docs/examples.md) · [**the ETL, in depth**](docs/etl.md) · [security & RBAC](docs/security.md)
+
 End-to-end [Temporal](https://temporal.io) example:
 
 - **Local runtime** — full Temporal cluster (server, Postgres, web UI, admin tools) via Docker Compose.
