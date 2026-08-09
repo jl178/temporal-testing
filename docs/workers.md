@@ -13,6 +13,52 @@ Registration specs auto-discover every `@workflow.defn` / `@activity.defn`
 in a module, or name them explicitly. Connection comes from
 `TEMPORAL_ADDRESS` / `TEMPORAL_NAMESPACE`.
 
+## Who runs this command, and for how long
+
+Nobody types it — it is a **service definition**. Locally the `run.sh`
+scripts spawn the processes so demos are self-contained; in a real
+deployment the line is the container CMD of a long-lived service: an ECS
+service (the CDK `TemporalWorkerService` construct — one service per fleet,
+autoscaled on task-queue backlog), a k8s Deployment, or systemd. The prod
+compose stack shows the pattern: `temporal-app-worker-python` is exactly
+such a container, running continuously.
+
+Lifecycle semantics:
+
+- **Serves all future executions** — a worker is not per-job; it polls its
+  queue forever and picks up a workflow started next month just the same.
+- **New activity/workflow types are a deploy** — the server stores no code;
+  a worker executes only what it registered at startup. Ship a new image
+  with the new registrations and restart the fleet. No cluster-side change.
+- **Downtime loses nothing** — with every worker on a queue down, tasks
+  accumulate in the queue and drain when one returns. That backlog is also
+  the autoscaling signal.
+- **Scaling = replicas** — more capacity is more instances of the same
+  command; the pull model spreads tasks across whoever has free slots.
+
+## A concrete trace — one file through the fleets
+
+The complex batch starts four fleets (default mode). Following
+`payments_2026-08.csv` through them:
+
+| Server dispatches | Queue | Picked up by | Why |
+|---|---|---|---|
+| workflow task: `FileIngestWorkflow` starts | `file-ingest` | small (workflows) | deciding "call land next" is microseconds of replay |
+| activity `land_sftp_file` | `file-ingest` | medium (activities) | I/O stream; 1 of 16 slots |
+| workflow task: advance | `file-ingest` | small | never queued behind anyone's activity — small runs none |
+| activities `classify_route`, `resolve_transform_spec` | `file-ingest` | medium | metadata lookups on the thread pool |
+| workflow task: child `transform-payments-…` starts | `etl-pipeline` | small (etl) | the child's coordination |
+| activity `submit_emr_job` | `etl-pipeline` | medium (etl) | blocking boto3 launcher, heartbeating |
+| activity `run_local_transform` | `etl-pipeline` | medium (etl) | `spark_remote` set ⇒ thin dbt client — the cluster computes |
+| activity `validate_output` | `etl-pipeline` | medium (etl) | metadata checks |
+
+In the fallback (`SPARK_CONNECT_URI=""`) one thing changes: the workflow
+routes `run_local_transform` to `compute-large`, a fifth fleet (large
+profile) picks it up, and the profile bites — each slot is a Spark JVM, so
+admission is resource-tuned and capped at 2 while ten queued transforms
+drain without ever slowing the medium fleets. **Queue = who may run it;
+profile = how much runs at once.**
+
 ## Profiles are templates, not shared pools
 
 One deliberate design point: sizes are **resource envelopes teams
