@@ -1,0 +1,63 @@
+# THE CANONICAL DATA MODEL — one entity per route.
+#
+# This is the authoritative definition of what each data type looks like
+# after normalization. The layers that conform data to it:
+#   1. spec column_aliases  — vendor name variants -> these column names
+#   2. spec require_columns — landing gate (quarantine before compute)
+#   3. stg_* models         — canonical types + semantic cleanup (casts,
+#                             trim/lower), selecting exactly these columns
+#   4. the tests below      — enforced on every `dbt build`; a violation
+#                             fails the transform child workflow
+version: 2
+
+models:
+  - name: stg_orders
+    description: >
+      Canonical order: one row per order line as delivered by a vendor.
+      Grain: order_id.
+    columns:
+      - name: order_id
+        description: Vendor order identifier (int).
+        data_tests: [not_null, unique]
+      - name: customer
+        description: Customer key; joins dim_customers.customer.
+        data_tests: [not_null]
+      - name: order_date
+        description: Order date (date).
+        data_tests: [not_null]
+      - name: amount
+        description: Order amount (double, vendor currency).
+        data_tests: [not_null]
+      - name: status
+        description: Lifecycle status, lowercased/trimmed.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ["completed", "cancelled", "pending"]
+
+  - name: stg_customers
+    description: >
+      Canonical customer: one row per customer. Grain: customer.
+    columns:
+      - name: customer
+        data_tests: [not_null, unique]
+      - name: segment
+        description: Commercial segment, lowercased.
+        data_tests: [not_null]
+      - name: region
+        description: Operating region, lowercased.
+        data_tests: [not_null]
+
+  - name: stg_payments
+    description: >
+      Canonical payment: one row per payment event. Grain: payment_id.
+    columns:
+      - name: payment_id
+        data_tests: [not_null, unique]
+      - name: order_id
+        description: Order the payment settles; joins stg_orders.order_id.
+        data_tests: [not_null]
+      - name: paid_amount
+        data_tests: [not_null]
+      - name: paid_date
+        data_tests: [not_null]
