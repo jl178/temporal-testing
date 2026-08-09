@@ -83,13 +83,23 @@ jobs:
           aws iam put-user-policy --user-name cicd_user \
             --policy-name temporal-testing-ephemeral-cfn \
             --policy-document file:///tmp/cfn-policy.json
-          sleep 10  # IAM propagation
+          sleep 30  # IAM propagation is eventually consistent
 
       - name: Bootstrap (isolated qualifier + toolkit)
         run: |
-          npx cdk bootstrap "aws://$ACCOUNT/us-east-1" \
-            --qualifier "$QUALIFIER" \
-            --toolkit-stack-name "$TOOLKIT_STACK"
+          # Retry: IAM grants propagate eventually; early CFN calls can 403.
+          for attempt in 1 2 3; do
+            if npx cdk bootstrap "aws://$ACCOUNT/us-east-1" \
+                 --qualifier "$QUALIFIER" \
+                 --toolkit-stack-name "$TOOLKIT_STACK"; then
+              exit 0
+            fi
+            echo "bootstrap attempt $attempt failed; cleaning partial stack and retrying"
+            aws cloudformation delete-stack --stack-name "$TOOLKIT_STACK" || true
+            aws cloudformation wait stack-delete-complete --stack-name "$TOOLKIT_STACK" || true
+            sleep 30
+          done
+          exit 1
 
       - name: Deploy (create-everything, suffixed)
         run: |
