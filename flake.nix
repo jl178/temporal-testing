@@ -55,6 +55,8 @@
             catalog-down = mkApp "catalog-down" ''docker compose -f docker-compose.catalog.yml down "$@"'';
             sftp-up = mkApp "sftp-up" ''docker compose up -d sftp'';
             sftp-down = mkApp "sftp-down" ''docker compose rm -sf sftp'';
+            spark-up = mkApp "spark-up" ''docker compose -f docker-compose.spark.yml up -d'';
+            spark-down = mkApp "spark-down" ''docker compose -f docker-compose.spark.yml down "$@"'';
             examples = mkApp "examples" ''exec scripts/validate-local.sh "$@"'';
             infra-test = mkApp "infra-test" ''
               cd infra

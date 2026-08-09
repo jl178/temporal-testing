@@ -2,8 +2,9 @@ temporalio>=1.9,<2
 boto3>=1.34,<2
 dbt-spark[session]>=1.8,<2
 # Iceberg's newest Spark runtime is 4.1_2.13 (see ICEBERG_PACKAGES in
-# spark_job.py) — keep pyspark on the matching minor.
-pyspark>=4.1,<4.2
+# spark_job.py) — keep pyspark on the matching minor. [connect] pulls the
+# Spark Connect client (grpc) for spark_remote mode.
+pyspark[connect]>=4.1,<4.2
 # ingest pipeline: SFTP client + rules-based parser
 asyncssh>=2.14,<3
 pandas>=2.1,<3

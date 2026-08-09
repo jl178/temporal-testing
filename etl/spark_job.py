@@ -20,12 +20,24 @@ Job spec:
                "type": "rest",                 #   ephemeral in-memory catalog
                "name": "lake",                 # "rest" (Iceberg REST, local)
                "uri": "http://localhost:8181", #   or "glue" (real AWS)
-               "warehouse": "s3://bucket/warehouse"}
-}
+               "warehouse": "s3://bucket/warehouse"},
+  "spark_remote": "sc://localhost:15002"       # OPTIONAL — execute on a remote
+}                                              #   cluster via Spark Connect
 
 Without `catalog`, table metadata lives only for this job run (each run is
 self-contained). With it, dbt models materialize as Iceberg tables in a
 persistent catalog that other engines (and later runs) can query by name.
+
+Execution modes:
+  - default: in-process Spark (local[*] here; the cluster when this script is
+    the EMR spark-submit entry point)
+  - spark_remote: this process is a Spark Connect CLIENT — dbt compiles SQL
+    here, the remote cluster executes it. Locally that's a spark-connect
+    container; on AWS it's an EMR Serverless interactive session endpoint
+    (emr-7.13+), per https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/tutorials-dbt.html
+    In this mode inputs upload via createDataFrame and outputs return via
+    collect/toPandas (the remote FS is not this process's FS), and the
+    catalog must be configured server-side (on the EMR application).
 
 Prints a final `ETL_RESULT {json}` line for the calling process to parse.
 """
@@ -116,14 +128,21 @@ def configure_catalog(builder, catalog: dict | None):
     return builder
 
 
-def load_inputs(spec: dict, spark, work: str, s3) -> None:
+def load_inputs(spec: dict, spark, work: str, s3, remote: bool) -> None:
     for inp in spec.get("inputs", []):
         bucket, key = parse_s3(inp["source"])
         local = os.path.join(work, "inputs", key.replace("/", "_"))
         os.makedirs(os.path.dirname(local), exist_ok=True)
         s3.download_file(bucket, key, local)
         fmt = inp.get("format", "csv")
-        if fmt == "csv":
+        if remote:
+            # A Spark Connect server can't see this process's filesystem —
+            # ship the rows over the wire instead.
+            import pandas as pd
+
+            pdf = pd.read_csv(local, dtype=str) if fmt == "csv" else pd.read_parquet(local)
+            df = spark.createDataFrame(pdf)
+        elif fmt == "csv":
             df = spark.read.option("header", True).csv(local)
         else:
             df = spark.read.format(fmt).load(local)
@@ -133,7 +152,7 @@ def load_inputs(spec: dict, spark, work: str, s3) -> None:
         df.write.mode("overwrite").saveAsTable(table)
 
 
-def export_outputs(spec: dict, spark, work: str, s3) -> list[dict]:
+def export_outputs(spec: dict, spark, work: str, s3, remote: bool) -> list[dict]:
     results = []
     for i, out in enumerate(spec.get("outputs", [])):
         df = spark.table(out["table"])
@@ -146,10 +165,15 @@ def export_outputs(spec: dict, spark, work: str, s3) -> list[dict]:
                 json.dump([r.asDict() for r in df.collect()], f, default=str)
             s3.upload_file(local, bucket, key)
         elif fmt == "parquet":
-            tmp = os.path.join(work, f"output_{i}_parquet")
-            df.coalesce(1).write.mode("overwrite").parquet(tmp)
-            part = glob.glob(os.path.join(tmp, "part-*.parquet"))[0]
-            s3.upload_file(part, bucket, key)
+            local = os.path.join(work, f"output_{i}.parquet")
+            if remote:
+                # Pull the result over the wire; the server FS is not ours.
+                df.toPandas().to_parquet(local, index=False)
+            else:
+                tmp = os.path.join(work, f"output_{i}_parquet")
+                df.coalesce(1).write.mode("overwrite").parquet(tmp)
+                local = glob.glob(os.path.join(tmp, "part-*.parquet"))[0]
+            s3.upload_file(local, bucket, key)
         else:
             raise ValueError(f"unsupported output format: {fmt}")
         results.append({"table": out["table"], "destination": out["destination"], "rows": rows})
@@ -175,26 +199,40 @@ def main() -> None:
 
     project_dir = resolve_project(spec["project"], work, s3)
 
+    remote = bool(spec.get("spark_remote"))
+    if remote and spec.get("catalog"):
+        raise ValueError(
+            "spark_remote mode: configure the catalog on the server/application "
+            "(e.g. Glue on the EMR Serverless app), not in the job spec"
+        )
+
+    if remote:
+        # Spark Connect client: dbt-spark's `session` method also honors
+        # SPARK_REMOTE, so dbt attaches to the same remote session.
+        os.environ["SPARK_REMOTE"] = spec["spark_remote"]
+
     from pyspark.sql import SparkSession
 
-    if not spec.get("catalog"):
-        # Stateless mode: the local warehouse is scratch space for this run;
-        # stale table locations from prior runs would collide with saveAsTable.
-        shutil.rmtree(os.path.join(work, "warehouse"), ignore_errors=True)
-
-    builder = (
-        SparkSession.builder.appName(spec.get("name", "dbt-spark-job"))
-        .master(os.environ.get("SPARK_MASTER", "local[2]"))
-        .config("spark.sql.warehouse.dir", os.path.join(work, "warehouse"))
-        .config("spark.driver.extraJavaOptions", f"-Dderby.system.home={work}")
-        .config("spark.ui.enabled", "false")
-    )
-    spark = configure_catalog(builder, spec.get("catalog")).getOrCreate()
+    if remote:
+        spark = SparkSession.builder.getOrCreate()
+    else:
+        if not spec.get("catalog"):
+            # Stateless mode: the local warehouse is scratch space for this
+            # run; stale table locations would collide with saveAsTable.
+            shutil.rmtree(os.path.join(work, "warehouse"), ignore_errors=True)
+        builder = (
+            SparkSession.builder.appName(spec.get("name", "dbt-spark-job"))
+            .master(os.environ.get("SPARK_MASTER", "local[2]"))
+            .config("spark.sql.warehouse.dir", os.path.join(work, "warehouse"))
+            .config("spark.driver.extraJavaOptions", f"-Dderby.system.home={work}")
+            .config("spark.ui.enabled", "false")
+        )
+        spark = configure_catalog(builder, spec.get("catalog")).getOrCreate()
 
     # dbt models follow the catalog choice (dbt_project.yml reads this).
     os.environ["DBT_FILE_FORMAT"] = "iceberg" if spec.get("catalog") else "parquet"
 
-    load_inputs(spec, spark, work, s3)
+    load_inputs(spec, spark, work, s3, remote)
 
     # dbt-spark `session` method reuses this process's active SparkSession.
     from dbt.cli.main import dbtRunner
@@ -208,7 +246,7 @@ def main() -> None:
         print("ETL_RESULT " + json.dumps({"success": False, "error": "dbt invocation failed"}))
         sys.exit(1)
 
-    outputs = export_outputs(spec, spark, work, s3)
+    outputs = export_outputs(spec, spark, work, s3, remote)
     print("ETL_RESULT " + json.dumps({"success": True, "outputs": outputs}))
     spark.stop()
 

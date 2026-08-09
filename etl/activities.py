@@ -56,7 +56,9 @@ class DbtSparkJob:
     name: str = "daily-revenue"
     # dbt project directory, relative to etl/ (uploaded to S3 for EMR runs)
     project_dir: str = "dbt"
-    dbt_args: list = field(default_factory=lambda: ["build"])
+    # Select only this job's models — the shared dbt project holds every
+    # route's models, and unselected ones would fail on missing sources.
+    dbt_args: list = field(default_factory=lambda: ["build", "--select", "tag:orders"])
     dbt_vars: dict = field(default_factory=dict)
     # [{key, table, format}] — landed as Spark tables before dbt runs
     inputs: list = field(
@@ -83,6 +85,12 @@ class DbtSparkJob:
     # Demo-only: seed the orders CSV as the first input. False when the
     # inputs were produced upstream (e.g. by the ingest pipeline).
     seed_demo_data: bool = True
+    # Optional Spark Connect endpoint: dbt runs in the activity and the SQL
+    # executes on the remote cluster. Locally sc://localhost:15002
+    # (nix run .#spark-up); on AWS an EMR Serverless interactive session
+    # endpoint (emr-7.13+). Mutually exclusive with `catalog` (configure the
+    # catalog on the server/application in this mode).
+    spark_remote: str | None = None
 
     def artifact_prefix(self) -> str:
         return f"jobs/{self.name}"
@@ -93,6 +101,7 @@ class DbtSparkJob:
             "name": self.name,
             "project": project,
             "catalog": self.catalog,
+            "spark_remote": self.spark_remote,
             "dbt_args": list(self.dbt_args),
             "dbt_vars": dict(self.dbt_vars),
             "inputs": [

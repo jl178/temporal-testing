@@ -137,6 +137,16 @@ nix run .#up                              # Temporal cluster
 ./etl/run.sh                              # worker + workflow; prints ETL PIPELINE: PASS
 ```
 
+**Execution modes** — the spec's optional `spark_remote` field picks where the SQL executes:
+
+- *Default*: Spark runs in-process — `local[2]` here, the cluster when the script is the EMR spark-submit entry point (dbt ships with the job).
+- *Spark Connect* (`spark_remote: "sc://host:15002"`): dbt runs **in the Temporal activity** and the SQL executes on a **remote cluster** — the architecture where workers stay thin and compute lives elsewhere, per [AWS's dbt-on-EMR-Serverless tutorial](https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/tutorials-dbt.html). Locally the remote is a real Spark Connect server container; on AWS it's an EMR Serverless **interactive session** endpoint (emr-7.13+, ideally with [pre-initialized capacity](https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/pre-init-capacity.html) keeping the pool warm) — obtain the session endpoint, set it as `spark_remote`, done; dbt-spark's `session` method honors `SPARK_REMOTE` natively. In this mode inputs travel via `createDataFrame` and results return over the wire (the remote filesystem isn't the worker's), and the catalog belongs to the server/application (e.g. Glue enabled on the EMR app), not the job spec.
+
+```sh
+nix run .#spark-up                                     # Spark Connect server on :15002
+SPARK_CONNECT_URI=sc://localhost:15002 ./etl/run.sh    # dbt in the activity, SQL on the server
+```
+
 **Table metadata / catalog** — the spec's optional `catalog` section picks between two modes:
 
 - *Default (no catalog)*: Spark's ephemeral in-memory catalog. Each run is self-contained; table metadata dies with the job; the only durable artifacts are the declared S3 outputs.

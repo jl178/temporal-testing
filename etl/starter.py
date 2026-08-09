@@ -25,7 +25,11 @@ async def main() -> None:
             "uri": os.environ["ICEBERG_REST_URI"],
             "warehouse": "s3://etl-data/warehouse",
         }
-    job = DbtSparkJob(catalog=catalog)
+    job = DbtSparkJob(
+        catalog=catalog,
+        # Third execution mode: dbt in the activity, SQL on a remote cluster.
+        spark_remote=os.environ.get("SPARK_CONNECT_URI"),
+    )
     result = await client.execute_workflow(
         EtlPipelineWorkflow.run,
         job,
