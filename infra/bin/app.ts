@@ -58,4 +58,8 @@ new TemporalStack(app, name('TemporalStack'), {
     hostedZoneId && zoneName ? { hostedZoneId, zoneName } : undefined,
   publicUi: str('publicUi') !== 'false',
   serviceDiscovery: str('serviceDiscovery') !== 'false',
+  e2eWorker:
+    str('workerRepo') && str('workerTag')
+      ? { repoName: str('workerRepo')!, tag: str('workerTag')! }
+      : undefined,
 });
