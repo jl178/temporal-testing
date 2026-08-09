@@ -14,6 +14,7 @@ import { TemporalDatabase } from './temporal-database';
 const DEFAULT_SERVER_IMAGE = 'temporalio/auto-setup:1.29.1';
 const DEFAULT_UI_IMAGE = 'temporalio/ui:2.53.1';
 const GRPC_PORT = 7233;
+const HTTP_API_PORT = 7243;
 const UI_PORT = 8080;
 
 export interface TemporalClusterProps {
@@ -54,6 +55,8 @@ export class TemporalCluster extends Construct {
   public readonly grpcLoadBalancer: elbv2.NetworkLoadBalancer;
   /** host:port for SDK clients inside the VPC. */
   public readonly grpcEndpoint: string;
+  /** Temporal HTTP API (DescribeTaskQueue etc.), reachable inside the VPC. */
+  public readonly httpApiEndpoint: string;
   public readonly uiUrl: string;
 
   constructor(scope: Construct, id: string, props: TemporalClusterProps) {
@@ -92,7 +95,7 @@ export class TemporalCluster extends Construct {
         POSTGRES_USER: ecs.Secret.fromSecretsManager(props.database.secret, 'username'),
         POSTGRES_PWD: ecs.Secret.fromSecretsManager(props.database.secret, 'password'),
       },
-      portMappings: [{ containerPort: GRPC_PORT }],
+      portMappings: [{ containerPort: GRPC_PORT }, { containerPort: HTTP_API_PORT }],
     });
 
     this.serverService = new ecs.FargateService(this, 'ServerService', {
@@ -117,6 +120,11 @@ export class TemporalCluster extends Construct {
       ec2.Port.tcp(GRPC_PORT),
       'gRPC from within the VPC (NLB health checks + SDK clients)',
     );
+    this.serverService.connections.allowFrom(
+      ec2.Peer.ipv4(props.vpc.vpcCidrBlock),
+      ec2.Port.tcp(HTTP_API_PORT),
+      'Temporal HTTP API (operational tooling, backlog metrics)',
+    );
 
     // Internal NLB so clients outside the Cloud Map namespace (e.g. peered
     // networks, VPN) get a stable gRPC endpoint.
@@ -127,7 +135,19 @@ export class TemporalCluster extends Construct {
     this.grpcLoadBalancer
       .addListener('Grpc', { port: GRPC_PORT })
       .addTargets('Server', { port: GRPC_PORT, targets: [this.serverService] });
+    this.grpcLoadBalancer
+      .addListener('HttpApi', { port: HTTP_API_PORT })
+      .addTargets('ServerHttp', {
+        port: HTTP_API_PORT,
+        targets: [
+          this.serverService.loadBalancerTarget({
+            containerName: 'temporal-server',
+            containerPort: HTTP_API_PORT,
+          }),
+        ],
+      });
     this.grpcEndpoint = `${this.grpcLoadBalancer.loadBalancerDnsName}:${GRPC_PORT}`;
+    this.httpApiEndpoint = `http://${this.grpcLoadBalancer.loadBalancerDnsName}:${HTTP_API_PORT}`;
 
     // --- Temporal web UI ---
     this.uiService = new ecs_patterns.ApplicationLoadBalancedFargateService(this, 'Ui', {

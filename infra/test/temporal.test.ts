@@ -1,7 +1,8 @@
-import { App, Stack, aws_ec2 as ec2 } from 'aws-cdk-lib';
+import { App, Stack, aws_ec2 as ec2, aws_ecs as ecs } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { TemporalStack } from '../lib/stacks/temporal-stack';
 import { NetworkStack } from '../lib/stacks/network-stack';
+import { TemporalWorkerService } from '../lib/constructs/temporal-worker';
 
 const ENV = { account: '111111111111', region: 'us-east-1' };
 
@@ -188,6 +189,71 @@ describe('service discovery disabled', () => {
     const address = env.find((e: any) => e.Name === 'TEMPORAL_ADDRESS');
     // Address is a CFN join over the NLB's DNSName attribute, not a Cloud Map name.
     expect(JSON.stringify(address.Value)).toContain('DNSName');
+  });
+});
+
+describe('autoscaled worker fleet', () => {
+  const app = new App();
+  const stack = new Stack(app, 'Workers', { env: ENV });
+  const vpc = importedVpc(stack);
+  const cluster = new ecs.Cluster(stack, 'EcsCluster', { vpc });
+  new TemporalWorkerService(stack, 'HeavyFleet', {
+    ecsCluster: cluster,
+    image: ecs.ContainerImage.fromRegistry('example/etl-heavy-worker:1'),
+    temporalAddress: 'temporal-frontend.temporal.local:7233',
+    taskQueue: 'etl-heavy',
+    autoscaling: {
+      maxCapacity: 10,
+      scaleUpBacklog: 50,
+      temporalHttpEndpoint: 'http://internal-nlb.example:7243',
+    },
+  });
+  const template = Template.fromStack(stack);
+
+  test('publishes backlog metrics via a scheduled poller lambda', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Runtime: 'python3.12',
+      Environment: {
+        Variables: Match.objectLike({
+          TASK_QUEUE: 'etl-heavy',
+          TEMPORAL_HTTP_ENDPOINT: 'http://internal-nlb.example:7243',
+        }),
+      },
+    });
+    template.hasResourceProperties('AWS::Events::Rule', {
+      ScheduleExpression: 'rate(1 minute)',
+    });
+  });
+
+  test('step-scales the service on backlog depth', () => {
+    template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+      MinCapacity: 1,
+      MaxCapacity: 10,
+      ServiceNamespace: 'ecs',
+    });
+    template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalingPolicy', {
+      PolicyType: 'StepScaling',
+    });
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      Namespace: 'Temporal/TaskQueue',
+      MetricName: 'ApproximateBacklogCount',
+      Dimensions: Match.arrayWith([
+        Match.objectLike({ Name: 'TaskQueue', Value: 'etl-heavy' }),
+      ]),
+    });
+  });
+
+  test('worker container knows its queue and namespace', () => {
+    template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      ContainerDefinitions: Match.arrayWith([
+        Match.objectLike({
+          Environment: Match.arrayWith([
+            { Name: 'TEMPORAL_NAMESPACE', Value: 'default' },
+            { Name: 'TEMPORAL_TASK_QUEUE', Value: 'etl-heavy' },
+          ]),
+        }),
+      ]),
+    });
   });
 });
 
