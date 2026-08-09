@@ -36,6 +36,31 @@ Lifecycle semantics:
 - **Scaling = replicas** — more capacity is more instances of the same
   command; the pull model spreads tasks across whoever has free slots.
 
+## How code registers — there is no DAG bucket
+
+Coming from MWAA/Composer: there, a scheduler must *parse your DAG files*
+to know the graph, so code is distributed to it (S3/GCS sync). Temporal's
+server never parses or executes user code — so **there is nothing to
+upload or mount**. Workflows and activities live inside each fleet's
+container image like any application code; at startup the runner imports
+the registered modules into an in-memory table (type name → class/function)
+that lives and dies with the process.
+
+The server only ever handles **strings**: a starter sends a workflow type
+name + args; the server queues a task; a worker looks the name up in its
+own table. No validation that anything implements the type — which buys
+deploy-order independence (start workflows before their fleet deploys;
+tasks buffer) and means a broken module can only fail its own fleet's
+tasks, never a shared parse step.
+
+Consequences: adding a workflow/activity = shipping a new image (ordinary
+deploy; the queue buffers during the roll). "What's available" has no
+central catalog — the answer is the task-queue page (pollers, heartbeat
+telemetry) plus your deploy manifests; the runner command keeps
+registration explicit and reviewable. Changing *in-flight* workflow logic
+needs `workflow.patched()` or Worker Versioning (build IDs) — activities
+are simpler: not replayed, so new code applies on next retry.
+
 ## A concrete trace — one file through the fleets
 
 The complex batch starts four fleets (default mode). Following
