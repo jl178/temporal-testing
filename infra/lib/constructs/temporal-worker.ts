@@ -1,7 +1,6 @@
 import {
   Duration,
   RemovalPolicy,
-  Stack,
   aws_applicationautoscaling as appscaling,
   aws_cloudwatch as cloudwatch,
   aws_ec2 as ec2,
@@ -116,13 +115,13 @@ export class TemporalWorkerService extends Construct {
     super(scope, id);
 
     const namespace = props.temporalNamespace ?? 'default';
-    // Readable physical names: <stack>-<construct id> keeps the console
-    // legible while the stack-name prefix preserves the net-new guarantee
-    // (suffixed ephemeral stacks can never collide with each other).
-    const name = `${Stack.of(this).stackName}-${this.node.id}`;
+    // Readable physical names from the construct *path* (not id — two fleets
+    // with the same id under different parents must not collide). The
+    // stack-name prefix in the path preserves the net-new suffix guarantee.
+    const name = this.node.path.replace(/\//g, '-');
 
     const logGroup = new logs.LogGroup(this, 'Logs', {
-      logGroupName: `/ecs/${Stack.of(this).stackName}/${this.node.id}`,
+      logGroupName: `/ecs/${this.node.path}`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: RemovalPolicy.DESTROY,
     });

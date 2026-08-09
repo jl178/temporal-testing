@@ -187,9 +187,12 @@ jobs:
           aws s3 rb "s3://$B" || true
           aws ecr delete-repository --repository-name "cdk-$QUALIFIER-container-assets-$ACCOUNT-us-east-1" --force || true
           aws ecr delete-repository --repository-name "$E2E_REPO" --force || true
-          # Remove the run-scoped CloudFormation grant
-          aws iam delete-user-policy --user-name cicd_user \
-            --policy-name temporal-testing-ephemeral-cfn || true
+          # Fixed-name log groups: purge leftovers from any partial delete,
+          # else the NEXT run's deploy fails with AlreadyExists.
+          for lg in $(aws logs describe-log-groups --log-group-name-prefix "/ecs/TemporalStack-$SUFFIX" \
+              --query 'logGroups[].logGroupName' --output text); do
+            aws logs delete-log-group --log-group-name "$lg" || true
+          done
 
       - name: Post-teardown audit — nothing of ours remains
         if: always()
@@ -201,5 +204,18 @@ jobs:
               echo "STILL PRESENT: $s ($status)"; leftovers=1
             fi
           done
-          [ "$leftovers" = "0" ] && echo "AUDIT OK: all created stacks are gone"
+          remaining=$(aws logs describe-log-groups --log-group-name-prefix "/ecs/TemporalStack-$SUFFIX" \
+            --query 'logGroups[].logGroupName' --output text)
+          if [ -n "$remaining" ]; then echo "STILL PRESENT: log groups: $remaining"; leftovers=1; fi
+          [ "$leftovers" = "0" ] && echo "AUDIT OK: all created stacks and log groups are gone"
           exit $leftovers
+
+      # Runs AFTER the audit: the audit's describe-stacks needs this grant —
+      # revoking it first would make "gone" indistinguishable from "denied".
+      - name: Revoke run-scoped IAM grant
+        if: always()
+        run: |
+          aws iam delete-user-policy --user-name cicd_user \
+            --policy-name temporal-testing-ephemeral-cfn || true
+          echo "remaining inline policies on cicd_user:"
+          aws iam list-user-policies --user-name cicd_user --output text
