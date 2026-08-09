@@ -226,6 +226,17 @@ What the construct wires for you:
 - **IAM** — the task role is where the fleet's AWS permissions live (S3
   prefixes, EMR submission); Temporal itself needs no AWS permissions.
 
+**Cluster topology:** on Fargate an ECS cluster is a logical namespace,
+not a capacity pool — every task is an isolated microVM, so one cluster
+isolates as well as fifty. Recommended: a **platform cluster** (Temporal
+server/UI — so team deploy roles can't touch it) plus **one shared
+workload cluster** for all fleets; team isolation is carried by
+namespaces, queues, per-fleet services, task roles, and tags. Split
+further only for IAM legibility (clusters are free), and know the real
+scale walls: Fargate vCPU quotas and blast radius are per **account**,
+and each task consumes a subnet IP — size the VPC, not the cluster count.
+Environments (dev/stage/prod) are the sacred boundary, ideally accounts.
+
 Operating it day to day:
 
 - **Deploy new code / new activity types** → push a new image tag, update
