@@ -95,6 +95,72 @@ Profile definitions (one place to tune platform-wide):
 big-compute lane, and any team's activity-is-the-compute workload would
 route there — with its own fleet registering its own code.
 
+## On ECS — the deployment shape
+
+One fleet = **one ECS Fargate service**, defined by the CDK
+`TemporalWorkerService` construct. The construct speaks the same profile
+language as the runner: the *same* profile string sets the in-process
+concurrency envelope (via the container command) and the Fargate task size
+(via the `profile` prop) — so the process and its box always agree.
+
+| Profile | Fargate task size |
+|---|---|
+| small | 0.25 vCPU / 512 MB |
+| medium | 0.5 vCPU / 1 GB |
+| large | 4 vCPU / 16 GB |
+
+A complete fleet definition:
+
+```ts
+const renderFleet = new TemporalWorkerService(stack, 'BillingRenderFleet', {
+  ecsCluster,                                        // shared or team-owned
+  image: ecs.ContainerImage.fromEcrRepository(repo, 'v42'),  // the TEAM's image
+  command: [
+    'python', '-m', 'worker_platform',
+    '--queue', 'billing-render', '--profile', 'large',
+    '--activities', 'billing.render',
+  ],
+  taskQueue: 'billing-render',
+  temporalAddress: temporal.grpcEndpoint,            // the internal NLB
+  temporalNamespace: 'team-billing',
+  profile: 'large',                                  // Fargate 4 vCPU / 16 GB
+  autoscaling: {
+    maxCapacity: 10,
+    scaleUpBacklog: 20,                              // +1 task at 20 queued, +3 at 80
+    temporalHttpEndpoint: temporal.httpApiEndpoint,  // for the backlog poller
+  },
+});
+renderFleet.allowGrpcTo(temporal.serverService);      // SG: worker -> frontend :7233
+```
+
+What the construct wires for you:
+
+- **Task definition** — team image + the worker_platform command;
+  `TEMPORAL_ADDRESS` / `TEMPORAL_NAMESPACE` / `TEMPORAL_TASK_QUEUE` env;
+  CloudWatch logs (1-week retention).
+- **Autoscaling** — a 1-minute Lambda polls `DescribeTaskQueue` (enhanced
+  backlog stats) through the cluster's HTTP API, publishes
+  `ApproximateBacklogCount` to CloudWatch, and the service step-scales on
+  it: +1 at the threshold, +3 at 4×, drain to min on empty.
+- **Networking** — `allowGrpcTo` opens the one security-group rule a worker
+  needs. Workers make only *outbound* connections (long-poll); no inbound
+  ports, no load balancer, no service discovery entry.
+- **IAM** — the task role is where the fleet's AWS permissions live (S3
+  prefixes, EMR submission); Temporal itself needs no AWS permissions.
+
+Operating it day to day:
+
+- **Deploy new code / new activity types** → push a new image tag, update
+  the service (ECS rolling deploy). The queue buffers tasks during the
+  roll; nothing is lost.
+- **Scale manually** → desired count; **scale automatically** → the backlog
+  policy above.
+- **A fleet crashes or is scaled to zero** → tasks accumulate on its queue
+  and drain when it returns; schedule-to-start latency is the alarm to set.
+- **A team joins the platform** → they ship an image and instantiate this
+  construct once per fleet (typically: small for workflows, medium for
+  activities, large only if their activity is the compute).
+
 ## Rules the runner encodes (so teams don't have to remember them)
 
 - Sync (blocking) activities always get a thread pool — the boto3-in-async

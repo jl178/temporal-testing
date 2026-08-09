@@ -200,8 +200,14 @@ describe('autoscaled worker fleet', () => {
   new TemporalWorkerService(stack, 'HeavyFleet', {
     ecsCluster: cluster,
     image: ecs.ContainerImage.fromRegistry('example/etl-heavy-worker:1'),
+    command: [
+      'python', '-m', 'worker_platform',
+      '--queue', 'compute-large', '--profile', 'large',
+      '--activities', 'activities:run_local_transform',
+    ],
     temporalAddress: 'temporal-frontend.temporal.local:7233',
-    taskQueue: 'etl-heavy',
+    taskQueue: 'compute-large',
+    profile: 'large',
     autoscaling: {
       maxCapacity: 10,
       scaleUpBacklog: 50,
@@ -215,7 +221,7 @@ describe('autoscaled worker fleet', () => {
       Runtime: 'python3.12',
       Environment: {
         Variables: Match.objectLike({
-          TASK_QUEUE: 'etl-heavy',
+          TASK_QUEUE: 'compute-large',
           TEMPORAL_HTTP_ENDPOINT: 'http://internal-nlb.example:7243',
         }),
       },
@@ -238,18 +244,21 @@ describe('autoscaled worker fleet', () => {
       Namespace: 'Temporal/TaskQueue',
       MetricName: 'ApproximateBacklogCount',
       Dimensions: Match.arrayWith([
-        Match.objectLike({ Name: 'TaskQueue', Value: 'etl-heavy' }),
+        Match.objectLike({ Name: 'TaskQueue', Value: 'compute-large' }),
       ]),
     });
   });
 
-  test('worker container knows its queue and namespace', () => {
+  test('worker container knows its queue, namespace, command, and profile size', () => {
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      Cpu: '4096',
+      Memory: '16384',
       ContainerDefinitions: Match.arrayWith([
         Match.objectLike({
+          Command: Match.arrayWith(['worker_platform', '--profile', 'large']),
           Environment: Match.arrayWith([
             { Name: 'TEMPORAL_NAMESPACE', Value: 'default' },
-            { Name: 'TEMPORAL_TASK_QUEUE', Value: 'etl-heavy' },
+            { Name: 'TEMPORAL_TASK_QUEUE', Value: 'compute-large' },
           ]),
         }),
       ]),

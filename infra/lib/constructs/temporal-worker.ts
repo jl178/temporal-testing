@@ -31,19 +31,44 @@ export interface WorkerAutoscalingProps {
   readonly metricNamespace?: string;
 }
 
+/**
+ * Fargate task sizing matching the worker_platform size profiles — the same
+ * profile string a fleet passes to `python -m worker_platform --profile`
+ * sizes its container here, so the concurrency envelope and the compute
+ * envelope always agree.
+ */
+export const WORKER_PROFILE_SIZES: Record<string, { cpu: number; memoryLimitMiB: number }> = {
+  small: { cpu: 256, memoryLimitMiB: 512 },
+  medium: { cpu: 512, memoryLimitMiB: 1024 },
+  large: { cpu: 4096, memoryLimitMiB: 16384 },
+};
+
 export interface TemporalWorkerServiceProps {
   readonly ecsCluster: ecs.ICluster;
-  /** Worker container image (e.g. built from one of the examples/ dirs). */
+  /** Worker container image (the team's own image — its code, its deps). */
   readonly image: ecs.ContainerImage;
+  /**
+   * Container command — typically the worker_platform invocation, e.g.
+   * ['python', '-m', 'worker_platform', '--queue', 'billing-render',
+   *  '--profile', 'large', '--activities', 'billing.render'].
+   * Omit to use the image's CMD.
+   */
+  readonly command?: string[];
   /** Temporal frontend address, e.g. `temporal-frontend.temporal.local:7233`. */
   readonly temporalAddress: string;
   /** Task queue this fleet polls — also the autoscaling dimension. */
   readonly taskQueue: string;
   /** @default default */
   readonly temporalNamespace?: string;
-  /** @default 256 */
+  /**
+   * Size profile: sets Fargate cpu/memory to match the in-process
+   * worker_platform profile. Explicit cpu/memoryLimitMiB override it.
+   * @default small
+   */
+  readonly profile?: 'small' | 'medium' | 'large';
+  /** @default from profile */
   readonly cpu?: number;
-  /** @default 512 */
+  /** @default from profile */
   readonly memoryLimitMiB?: number;
   /** @default 1 */
   readonly desiredCount?: number;
@@ -78,12 +103,14 @@ export class TemporalWorkerService extends Construct {
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    const size = WORKER_PROFILE_SIZES[props.profile ?? 'small'];
     const taskDefinition = new ecs.FargateTaskDefinition(this, 'Task', {
-      cpu: props.cpu ?? 256,
-      memoryLimitMiB: props.memoryLimitMiB ?? 512,
+      cpu: props.cpu ?? size.cpu,
+      memoryLimitMiB: props.memoryLimitMiB ?? size.memoryLimitMiB,
     });
     taskDefinition.addContainer('worker', {
       image: props.image,
+      command: props.command,
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'temporal-worker', logGroup }),
       environment: {
         TEMPORAL_ADDRESS: props.temporalAddress,
