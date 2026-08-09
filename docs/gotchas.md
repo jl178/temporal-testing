@@ -1,0 +1,25 @@
+# Gotchas — every wall already hit, so nobody hits it twice
+
+Symptom → cause → fix. Check here FIRST when something fails strangely.
+
+| Symptom | Cause | Fix (already applied — pattern to keep) |
+|---|---|---|
+| Mart numbers exactly **doubled** | two transform attempts writing concurrently (spurious retry racing a zombie, or a stale worker from an interrupted run still polling) | wall-clock heartbeat pulses (never output-driven — Spark goes quiet for minutes); terminate/kill subprocess on cancellation; per-workflow-run scratch dirs; run scripts pkill orphaned workers |
+| Activity retried though the process was healthy | heartbeats emitted per-output-line; long quiet Spark stage starved them past `heartbeat_timeout` | heartbeat on a timer task, content-free |
+| A worker from *yesterday* processes today's tasks | `timeout`-killed test runs orphan background workers; they keep long-polling with stale code | `pkill -f "worker_platfor[m] --queue"` guard in run scripts (bracket = never self-matches); note: an *outer* shell whose command text contains the plain pattern will still be killed — don't embed the pattern in wrapper commands |
+| `LOCATION_ALREADY_EXISTS` from Spark saveAsTable | stale warehouse dir vs fresh in-memory catalog (stateless mode), or two writers sharing a scratch dir | stateless runs wipe their warehouse; scratch dirs unique per workflow run |
+| Compose one-shot registers empty-string search attributes | docker compose interpolates `$attr` → empty; `\|\| true` swallowed the error for months | `$$attr` in compose command strings; actually re-run one-shots after editing them |
+| CI: `Cannot find module './app.ts'` | root `.gitignore` `bin/` (meant for .NET) silently excluded `infra/bin/` from git — repo worked locally, broke on every fresh clone | scope ignore patterns (`examples/csharp/**/bin/`); after gitignore edits run `git status --ignored` on critical dirs |
+| CI synth: "Need to perform AWS calls … no credentials" | CDK availability-zone lookup; local runs had a cached `cdk.context.json` key CI lacked | commit `cdk.context.json` with the dummy-account key; **scrub real account ids from it before pushing** (lookups cache under account-keyed entries) |
+| Spark Connect container crash-loops on Ivy `FileNotFoundException` | the image's `spark` user has home `/nonexistent`; Ivy can't write its cache | `--conf spark.jars.ivy=/tmp/.ivy2` |
+| Iceberg S3FileIO: "Unable to load region" | AWS SDK v2 reads `AWS_REGION`, not `AWS_DEFAULT_REGION` | set both + `spark.sql.catalog.<name>.client.region` |
+| `NoClassDefFoundError: scala/Serializable` / `SparkView…not an interface` | Iceberg runtime jar built for a different Spark/Scala than installed pyspark | pin pyspark minor to the newest available `iceberg-spark-runtime-<spark>_<scala>` (currently 4.1_2.13 ⇒ `pyspark>=4.1,<4.2`); hadoop-aws must match the shipped hadoop-client (3.4.2) |
+| LocalEmu S3: `cannot import name 'deprecated' from 'warnings'` | LocalEmu needs Python ≥3.13; venv was 3.12 | dedicated 3.13 venv for LocalEmu; keep the ETL venv on 3.12 |
+| numpy/pyarrow wheels: `libstdc++.so.6` not found (NixOS) | pip wheels need native libs not on the default path | flake exports `LD_LIBRARY_PATH` (stdenv.cc.cc.lib + zlib) in dev shell and apps |
+| Container can't reach a host-published service (NixOS) | firewall blocks docker-bridge → host traffic | `network_mode: host` for services that must call localhost peers (spark-connect, iceberg-rest, temporal-ui→dex) |
+| OIDC discovery works but browser login breaks (or vice versa) | issuer URL must resolve identically for the backend (discovery/token) and the browser (redirect); go-oidc validates issuer match | host networking so `http://localhost:<port>` is the same URL for both |
+| Worker registers workflows it shouldn't serve | auto-discovery picked up *imported* `@workflow.defn` classes | runner only registers objects whose `__module__` is the registered module |
+| `WorkflowAlreadyStartedError` fails a whole batch | two files resolving to the same child id (stale twin of a renamed/recompressed drop) | idempotent SFTP seeding; catch → record `status: duplicate`, continue |
+| Tuner + fixed slot counts rejected by SDK | a resource tuner owns *all* slot types | when tuner is on, configure workflow slots through the tuner too |
+| dbt `build` fails on other routes' models | plain `dbt build` builds every model; unselected sources don't exist in this job | always `--select tag:<route>` per spec |
+| gz drop never discovered | SFTP pattern `*.csv` missed `.csv.gz` | pattern `*.csv*`; route on the *decompressed* name |

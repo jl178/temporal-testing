@@ -7,6 +7,10 @@
 | [etl.md](etl.md) | **The deep dive** — the `etl/` pipeline end to end: specs, canonical model, execution modes, ingest, workers, failure handling |
 | [workers.md](workers.md) | The generic worker platform: size profiles, placement guide, what runs where |
 | [security.md](security.md) | Auth chains, RBAC, and the local-vs-prod security posture |
+| [decisions.md](decisions.md) | The decision log — every architectural choice and its why |
+| [migration.md](migration.md) | Playbook for onboarding real/legacy pipelines onto the platform |
+| [prod-runbook.md](prod-runbook.md) | Ordered path to AWS, with the enforcement switch-list and honest [BUILD] gaps |
+| [gotchas.md](gotchas.md) | Symptom → cause table of every wall already hit |
 
 ## The 60-second map
 

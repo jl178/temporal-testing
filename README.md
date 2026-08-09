@@ -1,6 +1,8 @@
 # temporal-testing
 
-**Docs:** [documentation index](docs/README.md) · [architecture (local ≙ prod)](docs/architecture.md) · [runnable examples](docs/examples.md) · [**the ETL, in depth**](docs/etl.md) · [security & RBAC](docs/security.md)
+**Docs:** [index](docs/README.md) · [architecture (local ≙ prod)](docs/architecture.md) · [examples](docs/examples.md) · [**the ETL, in depth**](docs/etl.md) · [worker platform](docs/workers.md) · [security](docs/security.md) · [decision log](docs/decisions.md) · [migration playbook](docs/migration.md) · [prod runbook](docs/prod-runbook.md) · [gotchas](docs/gotchas.md)
+
+**Agents start here:** [CLAUDE.md](CLAUDE.md) — invariants, validation loop, extension recipes.
 
 End-to-end [Temporal](https://temporal.io) example:
 
