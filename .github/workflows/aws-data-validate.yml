@@ -101,8 +101,11 @@ jobs:
             --policy-document file:///tmp/cfn-policy.json
           sleep 30  # IAM propagation is eventually consistent
 
+      # Runs in BOTH modes: stacks store the cfn-exec role ARN they were
+      # created with — if the toolkit died before the app stacks, deletes
+      # fail with "role cannot be assumed" until same-named roles exist
+      # again (gotchas.md). Bootstrap is idempotent.
       - name: Bootstrap (isolated qualifier + toolkit)
-        if: inputs.mode != 'teardown-only'
         run: |
           for attempt in 1 2 3; do
             if npx cdk bootstrap "aws://$ACCOUNT/us-east-1" \
