@@ -19,6 +19,6 @@ USER root
 RUN dnf install -y python3.11 python3.11-pip && \
     python3.11 -m pip install --no-cache-dir \
       "dbt-core>=1.12,<2" "dbt-spark>=1.11,<2" "boto3>=1.34,<2"
-ENV PYSPARK_PYTHON=/usr/local/bin/python3.11 \
-    PYSPARK_DRIVER_PYTHON=/usr/local/bin/python3.11
+ENV PYSPARK_PYTHON=/usr/bin/python3.11 \
+    PYSPARK_DRIVER_PYTHON=/usr/bin/python3.11
 USER hadoop:hadoop
