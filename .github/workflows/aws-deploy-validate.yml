@@ -285,10 +285,13 @@ jobs:
           aws ecr delete-repository --repository-name "cdk-$QUALIFIER-container-assets-$ACCOUNT-us-east-1" --force || true
           aws ecr delete-repository --repository-name "$E2E_REPO" --force || true
           # Fixed-name log groups: purge leftovers from any partial delete,
-          # else the NEXT run's deploy fails with AlreadyExists.
-          for lg in $(aws logs describe-log-groups --log-group-name-prefix "/ecs/TemporalStack-$SUFFIX" \
-              --query 'logGroups[].logGroupName' --output text); do
-            aws logs delete-log-group --log-group-name "$lg" || true
+          # else the NEXT run's deploy fails with AlreadyExists. Includes
+          # the RETAIN groups CDK's Lambdas create at runtime (poller).
+          for prefix in "/ecs/TemporalStack-$SUFFIX" "/aws/lambda/TemporalStack-$SUFFIX"; do
+            for lg in $(aws logs describe-log-groups --log-group-name-prefix "$prefix" \
+                --query 'logGroups[].logGroupName' --output text); do
+              aws logs delete-log-group --log-group-name "$lg" || true
+            done
           done
 
       - name: Post-teardown audit — nothing of ours remains

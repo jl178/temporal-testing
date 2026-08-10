@@ -100,7 +100,9 @@ jobs:
                   "arn:aws:glue:us-east-1:$ACCOUNT:database/raw",
                   "arn:aws:glue:us-east-1:$ACCOUNT:database/analytics",
                   "arn:aws:glue:us-east-1:$ACCOUNT:table/raw/*",
-                  "arn:aws:glue:us-east-1:$ACCOUNT:table/analytics/*"
+                  "arn:aws:glue:us-east-1:$ACCOUNT:table/analytics/*",
+                  "arn:aws:glue:us-east-1:$ACCOUNT:userDefinedFunction/raw/*",
+                  "arn:aws:glue:us-east-1:$ACCOUNT:userDefinedFunction/analytics/*"
                 ]
               }
             ]
@@ -110,19 +112,6 @@ jobs:
             --policy-name temporal-testing-ephemeral-cfn-data \
             --policy-document file:///tmp/cfn-policy.json
           sleep 30  # IAM propagation is eventually consistent
-
-      - name: Reset derivative Glue state from prior cycles
-        if: inputs.mode != 'teardown-only'
-        run: |
-          # Stale raw/analytics databases from a half-cleaned run hold
-          # Iceberg tables whose metadata points at a TORN-DOWN bucket —
-          # dbt then dies on NoSuchBucketException (gotchas.md). These
-          # databases are derivative artifacts of this harness; recreate
-          # from scratch every cycle. `default` is never touched.
-          for db in raw analytics; do
-            aws glue delete-database --name "$db" 2>/dev/null \
-              && echo "deleted stale glue database: $db" || true
-          done
 
       # Runs in BOTH modes: stacks store the cfn-exec role ARN they were
       # created with — if the toolkit died before the app stacks, deletes
@@ -142,6 +131,26 @@ jobs:
             sleep 30
           done
           exit 1
+
+      - name: Reset derivative Glue state from prior cycles
+        if: inputs.mode != 'teardown-only'
+        run: |
+          # Stale raw/analytics databases from a half-cleaned run hold
+          # Iceberg tables whose metadata points at a TORN-DOWN bucket —
+          # dbt then dies on NoSuchBucketException (gotchas.md). These
+          # databases are derivative artifacts of this harness; recreate
+          # from scratch every cycle. `default` is never touched.
+          # FAIL LOUDLY: a swallowed delete error here resurfaces 20
+          # minutes later as an inscrutable EMR job failure.
+          for db in raw analytics; do
+            if aws glue get-database --name "$db" >/dev/null 2>&1; then
+              echo "stale glue database found: $db — deleting"
+              aws glue delete-database --name "$db"
+              echo "deleted: $db"
+            else
+              echo "no stale glue database: $db"
+            fi
+          done
 
       - name: Build and push the ETL worker + EMR dbt images
         if: inputs.mode != 'teardown-only'
@@ -233,7 +242,18 @@ jobs:
             --query 'logStreams[0].logStreamName' --output text)
           aws logs get-log-events --log-group-name "$LOGGROUP" --log-stream-name "$STREAM" \
             --query 'events[].message' --output text || true
-          [ "$EXIT" = "0" ] || { echo "etl starter exited $EXIT"; exit 1; }
+          if [ "$EXIT" != "0" ]; then
+            echo "etl starter exited $EXIT — dumping fleet logs (teardown erases them):"
+            for lg in EtlActivityWorker EtlWorkflowWorker; do
+              echo "===== /ecs/TemporalStack-$SUFFIX/$lg"
+              S=$(aws logs describe-log-streams --log-group-name "/ecs/TemporalStack-$SUFFIX/$lg" \
+                --order-by LastEventTime --descending --max-items 1 \
+                --query 'logStreams[0].logStreamName' --output text 2>/dev/null) || continue
+              aws logs get-log-events --log-group-name "/ecs/TemporalStack-$SUFFIX/$lg" \
+                --log-stream-name "$S" --query 'events[].message' --output text 2>/dev/null | tail -40
+            done
+            exit 1
+          fi
           echo "VALIDATED: ETL PIPELINE PASS on AWS (EMR Serverless compute)"
 
       - name: Validate — Iceberg tables registered in the Glue Data Catalog
@@ -296,9 +316,13 @@ jobs:
           aws ecr delete-repository --repository-name "cdk-$QUALIFIER-container-assets-$ACCOUNT-us-east-1" --force || true
           aws ecr delete-repository --repository-name "$ETL_REPO" --force || true
           aws ecr delete-repository --repository-name "$EMR_REPO" --force || true
-          for lg in $(aws logs describe-log-groups --log-group-name-prefix "/ecs/TemporalStack-$SUFFIX" \
-              --query 'logGroups[].logGroupName' --output text); do
-            aws logs delete-log-group --log-group-name "$lg" || true
+          # /ecs fleet groups AND the RETAIN log groups that CDK's own
+          # Lambdas create at runtime (S3 auto-delete custom resource).
+          for prefix in "/ecs/TemporalStack-$SUFFIX" "/aws/lambda/TemporalStack-$SUFFIX" "/aws/lambda/TemporalDataStack-$SUFFIX"; do
+            for lg in $(aws logs describe-log-groups --log-group-name-prefix "$prefix" \
+                --query 'logGroups[].logGroupName' --output text); do
+              aws logs delete-log-group --log-group-name "$lg" || true
+            done
           done
 
       - name: Post-teardown audit — nothing of ours remains
