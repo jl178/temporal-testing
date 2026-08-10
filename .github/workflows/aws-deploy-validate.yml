@@ -154,17 +154,38 @@ jobs:
           curl -sf --max-time 10 "$UI/api/v1/settings" >/dev/null
           curl -s --max-time 10 "$UI/api/v1/namespaces?pageSize=10" | grep -q '"namespaces"'
           echo "VALIDATED: UI 200, settings API 200, namespaces listed (frontend + Aurora live)"
-          # Worker heartbeats (dynamic config): once the worker fleet is up
-          # and heartbeating, ListWorkers returns instances; without the
-          # dynamic config flag the RPC is refused.
-          for i in $(seq 1 20); do
-            if curl -s --max-time 10 "$UI/api/v1/namespaces/default/workers?pageSize=5" | grep -q workerInstanceKey; then
-              echo "VALIDATED: worker heartbeats enabled (ListWorkers returns live workers)"
-              exit 0
-            fi
-            sleep 15
-          done
-          echo "worker heartbeats never appeared"; exit 1
+
+      - name: Validate — worker heartbeats via the frontend HTTP API (in-VPC)
+        if: inputs.mode != 'teardown-only'
+        run: |
+          # ListWorkers lives on the FRONTEND HTTP API (:7243, internal
+          # NLB) — the UI server does not proxy it ("method ListWorkers
+          # not supported"), so the probe must run inside the VPC.
+          OUT() { jq -r ".\"TemporalStack-$SUFFIX\".$1" /tmp/outputs.json; }
+          PROBE='
+          import json, os, sys, time, urllib.request
+          host = os.environ["TEMPORAL_ADDRESS"].rsplit(":", 1)[0]
+          url = f"http://{host}:7243/api/v1/namespaces/default/workers?pageSize=5"
+          for _ in range(16):
+              try:
+                  body = urllib.request.urlopen(url, timeout=5).read().decode()
+                  if "workerInstanceKey" in body:
+                      print("WORKERS:", body[:400]); sys.exit(0)
+              except Exception as exc:
+                  print("retry:", exc)
+              time.sleep(15)
+          sys.exit(1)'
+          TASK=$(aws ecs run-task --cluster "$(OUT E2eClusterName)" --launch-type FARGATE \
+            --task-definition "$(OUT E2eStarterTaskDef)" \
+            --network-configuration "awsvpcConfiguration={subnets=[$(OUT E2ePrivateSubnets)],securityGroups=[$(OUT E2eStarterSecurityGroup)],assignPublicIp=DISABLED}" \
+            --overrides "$(jq -n --arg code "$(echo "$PROBE" | sed 's/^          //')" \
+              '{containerOverrides:[{name:"starter",command:["python","-c",$code]}]}')" \
+            --query 'tasks[0].taskArn' --output text)
+          aws ecs wait tasks-stopped --cluster "$(OUT E2eClusterName)" --tasks "$TASK"
+          EXIT=$(aws ecs describe-tasks --cluster "$(OUT E2eClusterName)" --tasks "$TASK" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          [ "$EXIT" = "0" ] || { echo "heartbeat probe exited $EXIT"; exit 1; }
+          echo "VALIDATED: worker heartbeats enabled (frontend ListWorkers returns live workers)"
 
       - name: Validate — execute a real workflow on the deployed cluster
         if: inputs.mode != 'teardown-only'
