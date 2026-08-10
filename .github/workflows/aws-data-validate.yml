@@ -232,7 +232,12 @@ jobs:
           # deploy: without them CDK can't see that TemporalStack imports
           # the data-plane exports, deletes in the wrong order, and CFN
           # cancels the delete (export in use) — gotchas.md.
+          # Per-stack retry: single-resource flakes (fresh-role IAM
+          # propagation) leave DELETE_FAILED; a delete-stack retry resumes
+          # with only the failed resources.
+          EXEC_ROLE="arn:aws:iam::$ACCOUNT:role/cdk-$QUALIFIER-cfn-exec-role-$ACCOUNT-us-east-1"
           for s in "TemporalStack-$SUFFIX" "TemporalDataStack-$SUFFIX" "TemporalNetworkStack-$SUFFIX"; do
+            aws cloudformation describe-stacks --stack-name "$s" >/dev/null 2>&1 || continue
             npx cdk destroy "$s" --force --exclusively \
               -c stackSuffix="$SUFFIX" \
               -c dataPlane=true \
@@ -241,6 +246,13 @@ jobs:
               -c etlRepo="$ETL_REPO" -c etlTag="teardown" \
               -c "@aws-cdk/core:bootstrapQualifier=$QUALIFIER" \
               --toolkit-stack-name "$TOOLKIT_STACK" || true
+            for attempt in 1 2 3; do
+              aws cloudformation describe-stacks --stack-name "$s" >/dev/null 2>&1 || break
+              echo "$s still present after destroy (attempt $attempt); retrying delete-stack"
+              sleep 30
+              aws cloudformation delete-stack --stack-name "$s" --role-arn "$EXEC_ROLE" || true
+              aws cloudformation wait stack-delete-complete --stack-name "$s" && break || true
+            done
           done
           # Glue databases are created by the job (not CFN) — remove them.
           for db in raw analytics default; do
