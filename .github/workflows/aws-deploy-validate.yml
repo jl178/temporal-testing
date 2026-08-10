@@ -168,24 +168,10 @@ jobs:
           # NLB) — the UI server does not proxy it ("method ListWorkers
           # not supported"), so the probe must run inside the VPC.
           OUT() { jq -r ".\"TemporalStack-$SUFFIX\".$1" /tmp/outputs.json; }
-          PROBE='
-          import json, os, sys, time, urllib.request
-          host = os.environ["TEMPORAL_ADDRESS"].rsplit(":", 1)[0]
-          url = f"http://{host}:7243/api/v1/namespaces/default/workers?pageSize=5"
-          for _ in range(16):
-              try:
-                  body = urllib.request.urlopen(url, timeout=5).read().decode()
-                  if "workerInstanceKey" in body:
-                      print("WORKERS:", body[:400]); sys.exit(0)
-              except Exception as exc:
-                  print("retry:", exc)
-              time.sleep(15)
-          sys.exit(1)'
           TASK=$(aws ecs run-task --cluster "$(OUT E2eClusterName)" --launch-type FARGATE \
             --task-definition "$(OUT E2eStarterTaskDef)" \
             --network-configuration "awsvpcConfiguration={subnets=[$(OUT E2ePrivateSubnets)],securityGroups=[$(OUT E2eStarterSecurityGroup)],assignPublicIp=DISABLED}" \
-            --overrides "$(jq -n --arg code "$(echo "$PROBE" | sed 's/^          //')" \
-              '{containerOverrides:[{name:"starter",command:["python","-c",$code]}]}')" \
+            --overrides '{"containerOverrides":[{"name":"starter","command":["python","heartbeat_probe.py"]}]}' \
             --query 'tasks[0].taskArn' --output text)
           aws ecs wait tasks-stopped --cluster "$(OUT E2eClusterName)" --tasks "$TASK"
           EXIT=$(aws ecs describe-tasks --cluster "$(OUT E2eClusterName)" --tasks "$TASK" \
