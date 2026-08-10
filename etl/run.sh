@@ -45,6 +45,9 @@ fi
 # Clean up workers orphaned by interrupted earlier runs — a stale poller
 # racing a live one corrupts shared state.
 pkill -f "worker_platfor[m] --queue" 2>/dev/null || true
+# pkill can't reach CONTAINERIZED stale workers (a yesterday's-image
+# worker polling this queue serves stale code) — stop those too.
+docker ps -q --filter "ancestor=temporal-testing/etl-worker:local" | xargs -r docker stop 2>/dev/null || true
 sleep 1
 
 PIDS=()

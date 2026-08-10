@@ -9,6 +9,9 @@ export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 PY="$ROOT/etl/.venv/bin/python"
 
 pkill -f "worker_platfor[m] --queue billing" 2>/dev/null || true
+# pkill can't reach CONTAINERIZED stale workers (a yesterday's-image
+# worker polling this queue serves stale code) — stop those too.
+docker ps -q --filter "ancestor=temporal-testing/billing-worker:local" | xargs -r docker stop 2>/dev/null || true
 sleep 1
 
 PIDS=()

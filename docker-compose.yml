@@ -16,7 +16,7 @@ services:
       - temporal-network
 
   temporal:
-    image: temporalio/auto-setup:1.29.1
+    image: temporalio/auto-setup:1.29.7
     container_name: temporal
     depends_on:
       postgresql:

@@ -1,0 +1,265 @@
+name: aws-data-validate
+
+# Real-AWS DATA-PLANE validation: the full ETL path on managed services —
+# file over Transfer Family SFTP -> S3 landing, raw seed -> S3, dbt on EMR
+# Serverless (custom image) with Iceberg tables in the Glue Data Catalog,
+# orchestrated by a Temporal workflow running on an in-VPC ECS fleet.
+# Same guarantees as aws-deploy-validate: everything net-new (suffix
+# `data`, its own bootstrap qualifier + toolkit), teardown always, audit
+# after. Manual dispatch only.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: aws-data-validate
+  cancel-in-progress: false
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_REGION: us-east-1
+  QUALIFIER: tmprl02
+  TOOLKIT_STACK: CDKToolkit-temporal-data
+  SUFFIX: data
+  ETL_REPO: temporal-testing-etl
+  EMR_REPO: temporal-testing-emr
+
+jobs:
+  data-validate-teardown:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+      - run: npm ci
+
+      - name: Resolve account
+        run: |
+          aws sts get-caller-identity
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "ACCOUNT=$ACCOUNT" >> "$GITHUB_ENV"
+
+      - name: Preflight — net-new guarantee
+        run: |
+          for s in "TemporalNetworkStack-$SUFFIX" "TemporalStack-$SUFFIX" "TemporalDataStack-$SUFFIX" "$TOOLKIT_STACK"; do
+            if aws cloudformation describe-stacks --stack-name "$s" >/dev/null 2>&1; then
+              echo "ABORT: stack $s already exists — refusing to touch it." >&2
+              exit 1
+            fi
+          done
+          for r in "$ETL_REPO" "$EMR_REPO"; do
+            if aws ecr describe-repositories --repository-names "$r" >/dev/null 2>&1; then
+              echo "ABORT: ECR repo $r already exists — refusing to touch it." >&2
+              exit 1
+            fi
+          done
+          echo "preflight OK: all target stacks + repos are net-new"
+
+      - name: Grant run-scoped CloudFormation policy (removed at the end)
+        run: |
+          cat > /tmp/cfn-policy.json <<EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "TemporalDataEphemeralStacks",
+                "Effect": "Allow",
+                "Action": ["cloudformation:*"],
+                "Resource": [
+                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/TemporalNetworkStack-$SUFFIX/*",
+                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/TemporalStack-$SUFFIX/*",
+                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/TemporalDataStack-$SUFFIX/*",
+                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/$TOOLKIT_STACK/*"
+                ]
+              },
+              {
+                "Sid": "NonStackScopedReadOnly",
+                "Effect": "Allow",
+                "Action": ["cloudformation:ValidateTemplate", "cloudformation:DescribeStacks"],
+                "Resource": "*"
+              }
+            ]
+          }
+          EOF
+          aws iam put-user-policy --user-name cicd_user \
+            --policy-name temporal-testing-ephemeral-cfn-data \
+            --policy-document file:///tmp/cfn-policy.json
+          sleep 30  # IAM propagation is eventually consistent
+
+      - name: Bootstrap (isolated qualifier + toolkit)
+        run: |
+          for attempt in 1 2 3; do
+            if npx cdk bootstrap "aws://$ACCOUNT/us-east-1" \
+                 --qualifier "$QUALIFIER" \
+                 --toolkit-stack-name "$TOOLKIT_STACK"; then
+              exit 0
+            fi
+            echo "bootstrap attempt $attempt failed; cleaning partial stack and retrying"
+            aws cloudformation delete-stack --stack-name "$TOOLKIT_STACK" || true
+            aws cloudformation wait stack-delete-complete --stack-name "$TOOLKIT_STACK" || true
+            sleep 30
+          done
+          exit 1
+
+      - name: Build and push the ETL worker + EMR dbt images
+        working-directory: .
+        run: |
+          aws ecr create-repository --repository-name "$ETL_REPO" >/dev/null
+          aws ecr create-repository --repository-name "$EMR_REPO" >/dev/null
+          REG="$ACCOUNT.dkr.ecr.us-east-1.amazonaws.com"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$REG"
+          docker build -f etl/Dockerfile -t "$REG/$ETL_REPO:$GITHUB_SHA" .
+          docker push "$REG/$ETL_REPO:$GITHUB_SHA"
+          docker build -f etl/emr.Dockerfile -t "$REG/$EMR_REPO:$GITHUB_SHA" etl
+          docker push "$REG/$EMR_REPO:$GITHUB_SHA"
+          # EMR Serverless pulls the custom image as a service principal.
+          cat > /tmp/emr-ecr-policy.json <<EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Sid": "EmrServerlessPull",
+              "Effect": "Allow",
+              "Principal": { "Service": "emr-serverless.amazonaws.com" },
+              "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+              "Condition": { "StringEquals": { "aws:SourceAccount": "$ACCOUNT" } }
+            }]
+          }
+          EOF
+          aws ecr set-repository-policy --repository-name "$EMR_REPO" \
+            --policy-text file:///tmp/emr-ecr-policy.json >/dev/null
+          echo "SFTP key for the Transfer user (ephemeral, this run only)"
+          ssh-keygen -t ed25519 -N '' -f /tmp/sftp_key
+          echo "SFTP_PUBKEY=$(cat /tmp/sftp_key.pub)" >> "$GITHUB_ENV"
+
+      - name: Deploy (network + temporal + data plane, suffixed)
+        run: |
+          npx cdk deploy --all --require-approval never \
+            -c stackSuffix="$SUFFIX" \
+            -c dataPlane=true \
+            -c emrImageUri="$ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/$EMR_REPO:$GITHUB_SHA" \
+            -c sftpPublicKey="$SFTP_PUBKEY" \
+            -c etlRepo="$ETL_REPO" -c etlTag="$GITHUB_SHA" \
+            -c "@aws-cdk/core:bootstrapQualifier=$QUALIFIER" \
+            --toolkit-stack-name "$TOOLKIT_STACK" \
+            --outputs-file /tmp/outputs.json
+          cat /tmp/outputs.json
+
+      - name: Validate — file lands in S3 through Transfer Family SFTP
+        run: |
+          DOUT() { jq -r ".\"TemporalDataStack-$SUFFIX\".$1" /tmp/outputs.json; }
+          HOST=$(DOUT SftpEndpoint)
+          BUCKET=$(DOUT DataBucket)
+          printf 'vendor_id,name\n1,acme\n' > /tmp/vendors.csv
+          sftp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i /tmp/sftp_key "etl@$HOST" <<'SFTP'
+          put /tmp/vendors.csv vendors.csv
+          SFTP
+          aws s3 ls "s3://$BUCKET/landing/vendors.csv"
+          echo "VALIDATED: SFTP -> S3 landing (Transfer Family)"
+
+      - name: Validate — ETL workflow runs dbt on EMR Serverless with Glue Iceberg
+        run: |
+          OUT() { jq -r ".\"TemporalStack-$SUFFIX\".$1" /tmp/outputs.json; }
+          CLUSTER=$(OUT EtlClusterName)
+          TASKDEF=$(OUT EtlStarterTaskDef)
+          SG=$(OUT EtlStarterSecurityGroup)
+          SUBNETS=$(OUT EtlPrivateSubnets)
+          LOGGROUP=$(OUT EtlStarterLogGroup)
+          TASK=$(aws ecs run-task --cluster "$CLUSTER" --launch-type FARGATE \
+            --task-definition "$TASKDEF" \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=DISABLED}" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "etl starter task: $TASK"
+          # EMR cold start + dbt run: allow up to ~35 min.
+          for i in $(seq 1 4); do
+            aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK" && break || true
+          done
+          EXIT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "--- etl starter output:"
+          STREAM=$(aws logs describe-log-streams --log-group-name "$LOGGROUP" \
+            --order-by LastEventTime --descending --max-items 1 \
+            --query 'logStreams[0].logStreamName' --output text)
+          aws logs get-log-events --log-group-name "$LOGGROUP" --log-stream-name "$STREAM" \
+            --query 'events[].message' --output text || true
+          [ "$EXIT" = "0" ] || { echo "etl starter exited $EXIT"; exit 1; }
+          echo "VALIDATED: ETL PIPELINE PASS on AWS (EMR Serverless compute)"
+
+      - name: Validate — Iceberg tables registered in the Glue Data Catalog
+        run: |
+          for db in raw analytics; do
+            echo "--- glue database: $db"
+            aws glue get-tables --database-name "$db" \
+              --query 'TableList[].{name:Name,type:Parameters.table_type}' --output table
+          done
+          aws glue get-tables --database-name analytics \
+            --query 'TableList[].Name' --output text | grep -q daily_revenue
+          echo "VALIDATED: Glue catalog holds the Iceberg tables (analytics.daily_revenue present)"
+
+      - name: Teardown — this run's infra ONLY
+        if: always()
+        run: |
+          npx cdk destroy --all --force \
+            -c stackSuffix="$SUFFIX" \
+            -c dataPlane=true \
+            -c "@aws-cdk/core:bootstrapQualifier=$QUALIFIER" \
+            --toolkit-stack-name "$TOOLKIT_STACK" || true
+          # Glue databases are created by the job (not CFN) — remove them.
+          for db in raw analytics default; do
+            aws glue delete-database --name "$db" 2>/dev/null || true
+          done
+          aws cloudformation delete-stack --stack-name "$TOOLKIT_STACK" || true
+          aws cloudformation wait stack-delete-complete --stack-name "$TOOLKIT_STACK" || true
+          B="cdk-$QUALIFIER-assets-$ACCOUNT-us-east-1"
+          for q in "Versions" "DeleteMarkers"; do
+            aws s3api list-object-versions --bucket "$B" --output json \
+              --query "{Objects: ${q}[].{Key:Key,VersionId:VersionId}}" > /tmp/purge.json 2>/dev/null || continue
+            if [ "$(jq '.Objects | length' /tmp/purge.json 2>/dev/null)" != "0" ] && [ "$(jq '.Objects' /tmp/purge.json)" != "null" ]; then
+              aws s3api delete-objects --bucket "$B" --delete file:///tmp/purge.json > /dev/null || true
+            fi
+          done
+          aws s3 rb "s3://$B" || true
+          aws ecr delete-repository --repository-name "cdk-$QUALIFIER-container-assets-$ACCOUNT-us-east-1" --force || true
+          aws ecr delete-repository --repository-name "$ETL_REPO" --force || true
+          aws ecr delete-repository --repository-name "$EMR_REPO" --force || true
+          for lg in $(aws logs describe-log-groups --log-group-name-prefix "/ecs/TemporalStack-$SUFFIX" \
+              --query 'logGroups[].logGroupName' --output text); do
+            aws logs delete-log-group --log-group-name "$lg" || true
+          done
+
+      - name: Post-teardown audit — nothing of ours remains
+        if: always()
+        run: |
+          leftovers=0
+          for s in "TemporalNetworkStack-$SUFFIX" "TemporalStack-$SUFFIX" "TemporalDataStack-$SUFFIX" "$TOOLKIT_STACK"; do
+            if aws cloudformation describe-stacks --stack-name "$s" >/dev/null 2>&1; then
+              status=$(aws cloudformation describe-stacks --stack-name "$s" --query 'Stacks[0].StackStatus' --output text)
+              echo "STILL PRESENT: $s ($status)"; leftovers=1
+            fi
+          done
+          remaining=$(aws logs describe-log-groups --log-group-name-prefix "/ecs/TemporalStack-$SUFFIX" \
+            --query 'logGroups[].logGroupName' --output text)
+          if [ -n "$remaining" ]; then echo "STILL PRESENT: log groups: $remaining"; leftovers=1; fi
+          for db in raw analytics; do
+            if aws glue get-database --name "$db" >/dev/null 2>&1; then
+              echo "STILL PRESENT: glue database $db"; leftovers=1
+            fi
+          done
+          [ "$leftovers" = "0" ] && echo "AUDIT OK: stacks, log groups, and glue databases are gone"
+          exit $leftovers
+
+      - name: Revoke run-scoped IAM grant
+        if: always()
+        run: |
+          aws iam delete-user-policy --user-name cicd_user \
+            --policy-name temporal-testing-ephemeral-cfn-data || true
+          echo "remaining inline policies on cicd_user:"
+          aws iam list-user-policies --user-name cicd_user --output text

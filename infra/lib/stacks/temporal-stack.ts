@@ -6,6 +6,7 @@ import {
   aws_ec2 as ec2,
   aws_ecr as ecr,
   aws_ecs as ecs,
+  aws_iam as iam,
   aws_logs as logs,
   aws_route53 as route53,
   aws_secretsmanager as secretsmanager,
@@ -15,6 +16,7 @@ import { TemporalCluster } from '../constructs/temporal-cluster';
 import { TemporalDatabase } from '../constructs/temporal-database';
 import { TemporalDns } from '../constructs/temporal-dns';
 import { TemporalWorkerService } from '../constructs/temporal-worker';
+import { DataPlaneStack } from './data-plane-stack';
 
 export interface ExistingDatabaseConfig {
   readonly endpointAddress: string;
@@ -42,12 +44,19 @@ export interface TemporalStackProps extends StackProps {
   readonly publicUi?: boolean;
   /** Cloud Map service discovery for the server. @default true */
   readonly serviceDiscovery?: boolean;
+  /** See TemporalDatabaseProps.auroraVersion. */
+  readonly auroraVersion?: string;
   /**
    * Workflow-execution e2e harness: a worker fleet + a one-shot starter
    * task definition using a pre-pushed image from ECR. Used by the
    * aws-deploy-validate workflow; omit for normal deployments.
    */
   readonly e2eWorker?: { repoName: string; tag: string };
+  /**
+   * ETL fleets + starter wired to a DataPlaneStack (S3/EMR/Glue): the
+   * aws-data-validate workflow's harness. Omit for normal deployments.
+   */
+  readonly etlWorker?: { repoName: string; tag: string; dataPlane: DataPlaneStack };
 }
 
 /**
@@ -64,6 +73,7 @@ export class TemporalStack extends Stack {
 
     this.database = new TemporalDatabase(this, 'Database', {
       vpc: props.vpc,
+      auroraVersion: props.auroraVersion,
       existingDatabase: props.existingDatabase
         ? {
             endpointAddress: props.existingDatabase.endpointAddress,
@@ -122,6 +132,19 @@ export class TemporalStack extends Stack {
         image,
         temporalAddress: this.temporal.grpcEndpoint,
         taskQueue: 'greeting-tasks-python',
+        profile: 'medium',
+        // Slot-capped slow activities: burst starts outpace one worker so a
+        // real backlog forms and the autoscaler has something to do.
+        environment: {
+          GREET_DELAY_SECONDS: '3',
+          WORKER_MAX_ACTIVITIES: '4',
+        },
+        autoscaling: {
+          minCapacity: 1,
+          maxCapacity: 3,
+          scaleUpBacklog: 10,
+          temporalHttpEndpoint: this.temporal.httpApiEndpoint,
+        },
       });
       worker.allowGrpcTo(this.temporal.serverService);
 
@@ -156,6 +179,116 @@ export class TemporalStack extends Stack {
         value: props.vpc.privateSubnets.map((s) => s.subnetId).join(','),
       });
       new CfnOutput(this, 'E2eStarterLogGroup', { value: starterLogs.logGroupName });
+    }
+
+    if (props.etlWorker) {
+      const { dataPlane } = props.etlWorker;
+      const repo = ecr.Repository.fromRepositoryName(
+        this, 'EtlRepo', props.etlWorker.repoName,
+      );
+      const image = ecs.ContainerImage.fromEcrRepository(repo, props.etlWorker.tag);
+      const dataEnv = {
+        ETL_BUCKET: dataPlane.bucket.bucketName,
+        GLUE_WAREHOUSE: `s3://${dataPlane.bucket.bucketName}/warehouse`,
+        EMR_APPLICATION_ID: dataPlane.emrApp.attrApplicationId,
+        EMR_EXECUTION_ROLE_ARN: dataPlane.emrExecutionRole.roleArn,
+        // The EMR-bundled Iceberg runtime; spark_job.py adds the Glue
+        // catalog session confs itself.
+        EMR_SPARK_SUBMIT_PARAMS:
+          '--conf spark.jars=/usr/share/aws/iceberg/lib/iceberg-spark3-runtime.jar',
+      };
+
+      // Invariant: workflow workers never register activities — two fleets.
+      const wfFleet = new TemporalWorkerService(this, 'EtlWorkflowWorker', {
+        ecsCluster: this.temporal.ecsCluster,
+        image,
+        temporalAddress: this.temporal.grpcEndpoint,
+        taskQueue: 'etl-pipeline',
+        profile: 'xsmall',
+        command: ['python', '-m', 'worker_platform', '--queue', 'etl-pipeline',
+          '--profile', 'xsmall', '--workflows', 'workflow'],
+      });
+      const actFleet = new TemporalWorkerService(this, 'EtlActivityWorker', {
+        ecsCluster: this.temporal.ecsCluster,
+        image,
+        temporalAddress: this.temporal.grpcEndpoint,
+        taskQueue: 'etl-pipeline',
+        profile: 'small',
+        command: ['python', '-m', 'worker_platform', '--queue', 'etl-pipeline',
+          '--profile', 'small', '--activities', 'activities'],
+        environment: dataEnv,
+      });
+      wfFleet.allowGrpcTo(this.temporal.serverService);
+      actFleet.allowGrpcTo(this.temporal.serverService);
+
+      // The in-process compute fallback lane at its documented size —
+      // deploys the `large` Fargate mapping (4 vCPU / 16 GB) for real.
+      const computeFleet = new TemporalWorkerService(this, 'EtlComputeLarge', {
+        ecsCluster: this.temporal.ecsCluster,
+        image,
+        temporalAddress: this.temporal.grpcEndpoint,
+        taskQueue: 'compute-large',
+        profile: 'large',
+        command: ['python', '-m', 'worker_platform', '--queue', 'compute-large',
+          '--profile', 'large', '--activities', 'activities:run_local_transform'],
+        environment: dataEnv,
+      });
+      computeFleet.allowGrpcTo(this.temporal.serverService);
+
+      // The activity fleet is the launcher: lake r/w, EMR submit/poll, and
+      // handing the execution role to EMR (never assuming it itself).
+      const actRole = actFleet.service.taskDefinition.taskRole;
+      dataPlane.bucket.grantReadWrite(actRole);
+      actRole.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: [
+          'emr-serverless:StartApplication', 'emr-serverless:GetApplication',
+          'emr-serverless:StartJobRun', 'emr-serverless:GetJobRun',
+        ],
+        resources: [
+          `arn:aws:emr-serverless:${this.region}:${this.account}:/applications/${dataPlane.emrApp.attrApplicationId}`,
+          `arn:aws:emr-serverless:${this.region}:${this.account}:/applications/${dataPlane.emrApp.attrApplicationId}/jobruns/*`,
+        ],
+      }));
+      actRole.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ['iam:PassRole'],
+        resources: [dataPlane.emrExecutionRole.roleArn],
+        conditions: {
+          StringEquals: { 'iam:PassedToService': 'emr-serverless.amazonaws.com' },
+        },
+      }));
+
+      const etlStarterLogs = new logs.LogGroup(this, 'EtlStarterLogs', {
+        logGroupName: `/ecs/${this.stackName}/etl-starter`,
+        retention: logs.RetentionDays.ONE_DAY,
+        removalPolicy: RemovalPolicy.DESTROY,
+      });
+      const etlStarterTask = new ecs.FargateTaskDefinition(this, 'EtlStarterTask', {
+        family: `${this.stackName}-etl-starter`,
+        cpu: 256,
+        memoryLimitMiB: 512,
+      });
+      etlStarterTask.addContainer('starter', {
+        image,
+        command: ['python', 'starter.py'],
+        environment: {
+          TEMPORAL_ADDRESS: this.temporal.grpcEndpoint,
+          TEMPORAL_NAMESPACE: 'default',
+          ...dataEnv,
+        },
+        logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'etl-starter', logGroup: etlStarterLogs }),
+      });
+      const etlStarterSg = new ec2.SecurityGroup(this, 'EtlStarterSg', {
+        vpc: props.vpc,
+        allowAllOutbound: true,
+      });
+
+      new CfnOutput(this, 'EtlClusterName', { value: this.temporal.ecsCluster.clusterName });
+      new CfnOutput(this, 'EtlStarterTaskDef', { value: etlStarterTask.taskDefinitionArn });
+      new CfnOutput(this, 'EtlStarterSecurityGroup', { value: etlStarterSg.securityGroupId });
+      new CfnOutput(this, 'EtlPrivateSubnets', {
+        value: props.vpc.privateSubnets.map((s) => s.subnetId).join(','),
+      });
+      new CfnOutput(this, 'EtlStarterLogGroup', { value: etlStarterLogs.logGroupName });
     }
 
     new CfnOutput(this, 'GrpcEndpoint', {

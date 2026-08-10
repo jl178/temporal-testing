@@ -115,3 +115,15 @@ services propagate tags to running tasks, and CloudFormation's own
 by tag beats name archaeology. Trade-off owned: renaming a named resource
 forces replacement, acceptable for an example platform; teams pinning
 prod stacks should treat physical names as frozen once deployed.
+
+**D18 — Version currency is validated, not assumed.** Dependency floors
+float to the latest within a major (`>=x,<next-major`); images and engine
+versions are explicit pins bumped by running the audit (registry/PyPI/
+`aws rds describe-db-engine-versions`) and re-running the validation
+loop. Current: Temporal 1.29.7/UI 2.53.1, Spark 4.1.2 + Iceberg 1.11.0,
+ES 8.19.19 (`ES_VERSION=v8`), Aurora PG 17.10, EMR Serverless 7.9.0,
+dbt-core 1.12 + dbt-spark 1.11. The Rust dbt engine (Fusion) was
+evaluated: its Spark adapter is beta, Thrift/Livy-only, Spark 3-only —
+incompatible with our session/Connect + Spark 4 architecture; revisit at
+GA. EMR's custom image installs Python 3.11 (EMR bundles EOL 3.9, which
+would silently resolve an old dbt).

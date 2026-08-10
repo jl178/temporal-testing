@@ -18,7 +18,7 @@ x-temporal-env: &temporal-env
   DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
   ENABLE_ES: "true"
   ES_SEEDS: elasticsearch
-  ES_VERSION: v7
+  ES_VERSION: v8
   PROMETHEUS_ENDPOINT: 0.0.0.0:8000
   TEMPORAL_ADDRESS: temporal-nginx:7233
   TEMPORAL_CLI_ADDRESS: temporal-nginx:7233
@@ -54,7 +54,7 @@ services:
     networks: [temporal-prod]
 
   elasticsearch:
-    image: elasticsearch:7.17.27
+    image: elasticsearch:8.19.19
     container_name: temporal-elasticsearch
     environment:
       - discovery.type=single-node
@@ -72,7 +72,7 @@ services:
   # template on first boot, then runs only the history service.
   temporal-history:
     <<: *temporal-service
-    image: temporalio/auto-setup:1.29.1
+    image: temporalio/auto-setup:1.29.7
     container_name: temporal-history
     depends_on:
       postgresql:

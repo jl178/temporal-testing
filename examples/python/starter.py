@@ -13,14 +13,24 @@ async def main() -> None:
         os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"),
         namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
     )
-    result = await client.execute_workflow(
-        GreetingWorkflow.run,
-        "Temporal",
-        id=f"greeting-python-{uuid.uuid4()}",
-        task_queue=TASK_QUEUE,
-    )
-    print(f"Workflow result: {result}")
-    assert result == "Hello, Temporal!", f"unexpected result: {result!r}"
+    # Burst knob (default 1): N concurrent workflows to build a backlog —
+    # used to exercise backlog autoscaling against a slot-capped fleet.
+    n = int(os.environ.get("STARTER_ITERATIONS", "1"))
+    run_id = uuid.uuid4()
+
+    async def one(i: int) -> str:
+        return await client.execute_workflow(
+            GreetingWorkflow.run,
+            "Temporal",
+            id=f"greeting-python-{run_id}-{i}",
+            task_queue=TASK_QUEUE,
+        )
+
+    results = await asyncio.gather(*(one(i) for i in range(n)))
+    print(f"Workflow result: {results[0]}")
+    assert all(r == "Hello, Temporal!" for r in results), results
+    if n > 1:
+        print(f"BURST: {n}/{n} workflows completed")
     print("PYTHON EXAMPLE: PASS")
 
 

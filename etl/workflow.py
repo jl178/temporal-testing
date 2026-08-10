@@ -44,25 +44,31 @@ class EtlPipelineWorkflow:
         emr = await workflow.execute_activity(
             submit_emr_job,
             job,
-            start_to_close_timeout=timedelta(minutes=10),
+            # Real EMR runs pay a cold start + provisioning; the emulated
+            # control plane returns in seconds. One generous cap covers both.
+            start_to_close_timeout=timedelta(minutes=30),
             heartbeat_timeout=timedelta(seconds=30),
             retry_policy=LIGHT_RETRY,
         )
         if emr["state"] != "SUCCESS":
             raise RuntimeError(f"EMR Serverless job ended in {emr['state']}")
 
-        # In spark_remote mode the transform activity is a thin client (dbt
-        # compiles SQL, the external Spark service executes it) — it runs on
-        # the light queue like any other launcher, mirroring production.
-        # Only the in-process-Spark fallback is heavy compute.
-        transform = await workflow.execute_activity(
-            run_local_transform,
-            job,
-            task_queue=TASK_QUEUE if job.spark_remote else HEAVY_TASK_QUEUE,
-            start_to_close_timeout=timedelta(minutes=15),
-            heartbeat_timeout=timedelta(minutes=2),
-            retry_policy=HEAVY_RETRY,
-        )
+        if job.emr_is_compute:
+            # EMR executed the full spec (real AWS) — nothing left to compute.
+            transform = None
+        else:
+            # In spark_remote mode the transform activity is a thin client
+            # (dbt compiles SQL, the external Spark service executes it) — it
+            # runs on the light queue like any other launcher, mirroring
+            # production. Only the in-process-Spark fallback is heavy compute.
+            transform = await workflow.execute_activity(
+                run_local_transform,
+                job,
+                task_queue=TASK_QUEUE if job.spark_remote else HEAVY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(minutes=15),
+                heartbeat_timeout=timedelta(minutes=2),
+                retry_policy=HEAVY_RETRY,
+            )
 
         validation = await workflow.execute_activity(
             validate_output,

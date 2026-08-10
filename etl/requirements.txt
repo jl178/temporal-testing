@@ -1,6 +1,9 @@
 temporalio>=1.9,<2
 boto3>=1.34,<2
-dbt-spark[session]>=1.8,<2
+# Latest OSS dbt (the Rust Fusion engine's Spark adapter is beta,
+# Thrift/Livy-only, Spark 3-only — unusable for our session/Connect +
+# Spark 4 architecture; see docs/decisions.md).
+dbt-spark[session]>=1.11,<2
 # Iceberg's newest Spark runtime is 4.1_2.13 (see ICEBERG_PACKAGES in
 # spark_job.py) — keep pyspark on the matching minor. [connect] pulls the
 # Spark Connect client (grpc) for spark_remote mode.

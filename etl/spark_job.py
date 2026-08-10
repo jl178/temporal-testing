@@ -289,11 +289,14 @@ def main() -> None:
             shutil.rmtree(os.path.join(work, "warehouse"), ignore_errors=True)
         builder = (
             SparkSession.builder.appName(spec.get("name", "dbt-spark-job"))
-            .master(os.environ.get("SPARK_MASTER", "local[2]"))
             .config("spark.sql.warehouse.dir", os.path.join(work, "warehouse"))
             .config("spark.driver.extraJavaOptions", f"-Dderby.system.home={work}")
             .config("spark.ui.enabled", "false")
         )
+        # Local launchers inject SPARK_MASTER=local[2]; under EMR
+        # spark-submit the platform owns the master — never override it.
+        if os.environ.get("SPARK_MASTER"):
+            builder = builder.master(os.environ["SPARK_MASTER"])
         packages = []
         if os.environ.get("AWS_ENDPOINT_URL"):
             # Emulator runs need the S3A connector; on AWS the platform
@@ -301,7 +304,14 @@ def main() -> None:
             packages.append(HADOOP_AWS_PACKAGE)
             builder = configure_s3a(builder)
         if spec.get("catalog"):
-            packages.append(spec["catalog"].get("packages", ICEBERG_PACKAGES))
+            # REST (local) pulls the Iceberg runtime from Maven; Glue (EMR)
+            # uses the EMR-bundled jar, injected via sparkSubmitParameters.
+            default_pkgs = (
+                ICEBERG_PACKAGES if spec["catalog"].get("type", "rest") == "rest" else ""
+            )
+            pkg = spec["catalog"].get("packages", default_pkgs)
+            if pkg:
+                packages.append(pkg)
         if packages:
             builder = builder.config("spark.jars.packages", ",".join(packages))
         spark = configure_catalog(builder, spec.get("catalog")).getOrCreate()

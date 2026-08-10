@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
+import { DataPlaneStack } from '../lib/stacks/data-plane-stack';
 import { NetworkStack } from '../lib/stacks/network-stack';
 import { TemporalStack } from '../lib/stacks/temporal-stack';
 
@@ -47,6 +48,18 @@ const networkStack = new NetworkStack(app, name('TemporalNetworkStack'), {
   natGateways: natGateways !== undefined ? Number(natGateways) : undefined,
 });
 
+// ETL data plane (S3 + EMR Serverless + Glue + optional Transfer SFTP),
+// used by the aws-data-validate workflow: -c dataPlane=true plus
+// emrImageUri/sftpPublicKey/etlRepo/etlTag.
+const dataPlane =
+  str('dataPlane') === 'true'
+    ? new DataPlaneStack(app, name('TemporalDataStack'), {
+        env,
+        emrImageUri: str('emrImageUri'),
+        sftpPublicKey: str('sftpPublicKey'),
+      })
+    : undefined;
+
 new TemporalStack(app, name('TemporalStack'), {
   env,
   vpc: networkStack.vpc,
@@ -64,8 +77,13 @@ new TemporalStack(app, name('TemporalStack'), {
     hostedZoneId && zoneName ? { hostedZoneId, zoneName } : undefined,
   publicUi: str('publicUi') !== 'false',
   serviceDiscovery: str('serviceDiscovery') !== 'false',
+  auroraVersion: str('auroraVersion'),
   e2eWorker:
     str('workerRepo') && str('workerTag')
       ? { repoName: str('workerRepo')!, tag: str('workerTag')! }
+      : undefined,
+  etlWorker:
+    dataPlane && str('etlRepo') && str('etlTag')
+      ? { repoName: str('etlRepo')!, tag: str('etlTag')!, dataPlane }
       : undefined,
 });

@@ -97,6 +97,10 @@ class DbtSparkJob:
     # endpoint (emr-7.13+). Mutually exclusive with `catalog` (configure the
     # catalog on the server/application in this mode).
     spark_remote: str | None = None
+    # True on AWS: the EMR Serverless batch job IS the compute (it runs the
+    # full spec), so the local transform step is skipped. False locally,
+    # where emulators run EMR's control plane but not its compute.
+    emr_is_compute: bool = False
 
     def artifact_prefix(self) -> str:
         return f"jobs/{self.name}"
@@ -177,8 +181,12 @@ def submit_emr_job(job: DbtSparkJob) -> dict:
     spec = job.to_spec(project=f"s3://{job.bucket}/{prefix}/dbt-project.tar.gz")
     s3.put_object(Bucket=job.bucket, Key=f"{prefix}/spec.json", Body=json.dumps(spec))
 
-    apps = emr.list_applications().get("applications", [])
-    app_id = next((a["id"] for a in apps if a["name"] == "temporal-etl"), None)
+    # Deployment provides the real application/role (CDK injects these on
+    # AWS); the lookup-or-create fallback serves the local emulator.
+    app_id = os.environ.get("EMR_APPLICATION_ID")
+    if not app_id:
+        apps = emr.list_applications().get("applications", [])
+        app_id = next((a["id"] for a in apps if a["name"] == "temporal-etl"), None)
     if app_id is None:
         app_id = emr.create_application(
             name="temporal-etl", type="SPARK", releaseLabel="emr-7.0.0"
@@ -188,27 +196,38 @@ def submit_emr_job(job: DbtSparkJob) -> dict:
     except Exception:
         pass  # some backends auto-start
 
+    spark_submit: dict = {
+        "entryPoint": f"s3://{job.bucket}/{prefix}/spark_job.py",
+        "entryPointArguments": [
+            "--spec", f"s3://{job.bucket}/{prefix}/spec.json",
+            "--work-dir", "/tmp/etl-work",
+        ],
+    }
+    # Runtime-owned Spark confs (e.g. the EMR-bundled Iceberg jar) come from
+    # the deployment, not code — local and AWS stay one codepath.
+    if os.environ.get("EMR_SPARK_SUBMIT_PARAMS"):
+        spark_submit["sparkSubmitParameters"] = os.environ["EMR_SPARK_SUBMIT_PARAMS"]
+
     run_id = emr.start_job_run(
         applicationId=app_id,
-        executionRoleArn="arn:aws:iam::000000000000:role/emr-serverless-etl",
-        jobDriver={
-            "sparkSubmit": {
-                "entryPoint": f"s3://{job.bucket}/{prefix}/spark_job.py",
-                "entryPointArguments": [
-                    "--spec", f"s3://{job.bucket}/{prefix}/spec.json",
-                    "--work-dir", "/tmp/etl-work",
-                ],
-            }
-        },
+        executionRoleArn=os.environ.get(
+            "EMR_EXECUTION_ROLE_ARN", "arn:aws:iam::000000000000:role/emr-serverless-etl"
+        ),
+        jobDriver={"sparkSubmit": spark_submit},
     )["jobRunId"]
 
     terminal = {"SUCCESS", "FAILED", "CANCELLED"}
     while True:
-        state = emr.get_job_run(applicationId=app_id, jobRunId=run_id)["jobRun"]["state"]
+        run = emr.get_job_run(applicationId=app_id, jobRunId=run_id)["jobRun"]
+        state = run["state"]
         activity.heartbeat(state)
         if state in terminal:
-            return {"applicationId": app_id, "jobRunId": run_id, "state": state}
-        time.sleep(2)
+            result = {"applicationId": app_id, "jobRunId": run_id, "state": state}
+            if state != "SUCCESS":
+                # Surface the platform's reason (counters/state only, no data).
+                result["stateDetails"] = run.get("stateDetails", "")
+            return result
+        time.sleep(5)
 
 
 @activity.defn
@@ -231,7 +250,13 @@ async def run_local_transform(job: DbtSparkJob) -> dict:
         "--work-dir", work_dir,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        # The launcher owns the default master; under EMR spark-submit the
+        # runner must NOT set one (the platform provides it).
+        env={
+            **os.environ,
+            "PYTHONUNBUFFERED": "1",
+            "SPARK_MASTER": os.environ.get("SPARK_MASTER", "local[2]"),
+        },
     )
     assert proc.stdout is not None
     # Log hygiene: raw Spark/dbt output can embed data fragments (e.g. a

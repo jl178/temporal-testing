@@ -27,6 +27,12 @@ export interface TemporalDatabaseProps {
    * PostgreSQL cluster is created with a generated master secret.
    */
   readonly existingDatabase?: ExistingDatabaseAttributes;
+  /**
+   * Aurora PostgreSQL engine version, e.g. '17.10'. Override to pin an
+   * already-deployed stack (an engine change on update = a major version
+   * upgrade of a live database). @default the repo's current latest pin
+   */
+  readonly auroraVersion?: string;
   /** ACUs, only used when creating the cluster. @default 0.5 */
   readonly minCapacity?: number;
   /** ACUs, only used when creating the cluster. @default 4 */
@@ -62,9 +68,13 @@ export class TemporalDatabase extends Construct {
       const secret = new rds.DatabaseSecret(this, 'Secret', { username: 'temporal' });
       this.cluster = new rds.DatabaseCluster(this, 'Cluster', {
         engine: rds.DatabaseClusterEngine.auroraPostgres({
-          // AWS retires old minors (16.4 no longer exists); pin a current
-          // one explicitly rather than trusting CDK enum freshness.
-          version: rds.AuroraPostgresEngineVersion.of('16.8', '16'),
+          // AWS retires old minors; pin the CURRENT latest explicitly
+          // (check `aws rds describe-db-engine-versions`) rather than
+          // trusting CDK enum freshness.
+          version: rds.AuroraPostgresEngineVersion.of(
+            props.auroraVersion ?? '17.10',
+            (props.auroraVersion ?? '17.10').split('.')[0],
+          ),
         }),
         writer: rds.ClusterInstance.serverlessV2('Writer'),
         serverlessV2MinCapacity: props.minCapacity ?? 0.5,

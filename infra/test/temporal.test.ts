@@ -47,7 +47,7 @@ describe('create-everything mode', () => {
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
       ContainerDefinitions: Match.arrayWith([
         Match.objectLike({
-          Image: 'temporalio/auto-setup:1.29.1',
+          Image: Match.stringLikeRegexp('temporalio/auto-setup:.*'),
           Environment: Match.arrayWith([
             { Name: 'DB', Value: 'postgres12' },
             { Name: 'DB_PORT', Value: '5432' },

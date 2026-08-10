@@ -18,7 +18,7 @@ name: etl-spark
 
 services:
   spark-connect:
-    image: spark:4.1.1
+    image: spark:4.1.2
     container_name: etl-spark-connect
     network_mode: host
     environment:

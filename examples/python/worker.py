@@ -20,6 +20,9 @@ async def main() -> None:
         task_queue=TASK_QUEUE,
         workflows=[GreetingWorkflow],
         activities=[compose_greeting],
+        # Load-test knob: a small per-worker slot cap means throughput
+        # scales with FLEET SIZE, so backlog autoscaling is observable.
+        max_concurrent_activities=int(os.environ.get("WORKER_MAX_ACTIVITIES", "100")),
     )
     print(f"Worker listening on task queue {TASK_QUEUE!r}", flush=True)
     await worker.run()
