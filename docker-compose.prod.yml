@@ -31,7 +31,7 @@ x-temporal-env: &temporal-env
   # TEMPORAL_JWT_PERMISSIONS_CLAIM: permissions
 
 x-temporal-service: &temporal-service
-  image: temporalio/server:1.29.1
+  image: temporalio/server:1.29.7
   restart: on-failure
   volumes:
     - ./dynamicconfig:/etc/temporal/config/dynamicconfig

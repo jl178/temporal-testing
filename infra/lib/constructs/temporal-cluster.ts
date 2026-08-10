@@ -107,9 +107,12 @@ export class TemporalCluster extends Construct {
       // /etc/temporal is NOT writable (image runs as the temporal user —
       // first attempt died on Permission denied and rolled back); /tmp is.
       entryPoint: ['sh', '-c'],
+      // TWO keys: heartbeats being STORED and the ListWorkers API being
+      // SERVED are separate flags (the second's absence 501s the RPC).
       command: [
         "printf '%s\\n' " +
         "'frontend.WorkerHeartbeatsEnabled:' '  - value: true' " +
+        "'frontend.ListWorkersEnabled:' '  - value: true' " +
         '> /tmp/dynamicconfig.yaml && ' +
         'exec /etc/temporal/entrypoint.sh autosetup',
       ],
