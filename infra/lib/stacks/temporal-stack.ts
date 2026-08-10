@@ -42,6 +42,8 @@ export interface TemporalStackProps extends StackProps {
   readonly existingHostedZone?: ExistingHostedZoneConfig;
   /** @default true */
   readonly publicUi?: boolean;
+  /** Public-UI ingress allowlist; see TemporalClusterProps.uiAllowedCidrs. */
+  readonly uiAllowedCidrs?: string[];
   /** Cloud Map service discovery for the server. @default true */
   readonly serviceDiscovery?: boolean;
   /** See TemporalDatabaseProps.auroraVersion. */
@@ -104,6 +106,7 @@ export class TemporalStack extends Stack {
         : undefined,
       database: this.database,
       publicUi: props.publicUi,
+      uiAllowedCidrs: props.uiAllowedCidrs,
       serviceDiscovery: props.serviceDiscovery,
     });
 

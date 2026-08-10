@@ -48,7 +48,7 @@ and the UI OIDC are in `docker-compose.prod.yml`.
 | DB credentials | compose env | Secrets Manager (already wired in CDK) |
 | Payload privacy | history stores payloads in plaintext; small JSON marts returned inline by design | codec server + payload encryption for sensitive namespaces; parquet-only outputs for sensitive marts |
 | Log hygiene | raw Spark/dbt output only in worker-local `job.log`; heartbeats/errors carry counters + aggregates; quarantine reasons truncated | same rule + centralized logs with retention |
-| Network | host ports on one machine | private subnets, SG-to-SG rules (CDK wires DB/server/UI/worker ingress), internal NLB; only the UI ALB optionally public |
+| Network | host ports on one machine | private subnets, SG-to-SG rules (CDK wires DB/server/UI/worker ingress), internal NLB; only the UI ALB optionally public — `-c publicUi=false` for internal, or `-c uiAllowedCidrs=203.0.113.7/32,198.51.100.0/24` to allowlist office/VPN ranges on a public one (gRPC is never internet-facing) |
 
 ## Notes on data leakage paths
 

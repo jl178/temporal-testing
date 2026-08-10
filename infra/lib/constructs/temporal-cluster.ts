@@ -33,6 +33,12 @@ export interface TemporalClusterProps {
   readonly serverMemoryMiB?: number;
   /** Whether the UI load balancer is internet-facing. @default true */
   readonly publicUi?: boolean;
+  /**
+   * With a public UI, restrict ingress to these CIDRs (e.g. office/VPN
+   * ranges). Omit = open to the internet (demo posture). Ignored when
+   * the UI is internal.
+   */
+  readonly uiAllowedCidrs?: string[];
   /** Private DNS namespace for service discovery. @default temporal.local */
   readonly cloudMapNamespaceName?: string;
   /**
@@ -93,7 +99,22 @@ export class TemporalCluster extends Construct {
     serverTask.addContainer('temporal-server', {
       image: ecs.ContainerImage.fromRegistry(props.serverImage ?? DEFAULT_SERVER_IMAGE),
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'temporal-server', logGroup: serverLogs }),
+      // Fargate has no file mounts, so the server's DYNAMIC CONFIG is
+      // written at container start, then the image's normal entrypoint
+      // runs. Parity with docker-compose's mounted development-sql.yaml —
+      // without it, dynamic-config-gated features (worker heartbeats,
+      // the UI Workers page) silently stay off.
+      // /etc/temporal is NOT writable (image runs as the temporal user —
+      // first attempt died on Permission denied and rolled back); /tmp is.
+      entryPoint: ['sh', '-c'],
+      command: [
+        "printf '%s\\n' " +
+        "'frontend.WorkerHeartbeatsEnabled:' '  - value: true' " +
+        '> /tmp/dynamicconfig.yaml && ' +
+        'exec /etc/temporal/entrypoint.sh autosetup',
+      ],
       environment: {
+        DYNAMIC_CONFIG_FILE_PATH: '/tmp/dynamicconfig.yaml',
         DB: 'postgres12',
         DB_PORT: String(props.database.port),
         POSTGRES_SEEDS: props.database.endpointAddress,
@@ -183,6 +204,9 @@ export class TemporalCluster extends Construct {
       minHealthyPercent: 0,
       circuitBreaker: { rollback: true },
       publicLoadBalancer: props.publicUi ?? true,
+      // With an allowlist, don't open the listener to the world — ingress
+      // is granted per-CIDR below instead.
+      openListener: !props.uiAllowedCidrs?.length,
       taskImageOptions: {
         image: ecs.ContainerImage.fromRegistry(props.uiImage ?? DEFAULT_UI_IMAGE),
         containerPort: UI_PORT,
@@ -196,6 +220,11 @@ export class TemporalCluster extends Construct {
       },
     });
     this.uiService.targetGroup.configureHealthCheck({ path: '/', healthyHttpCodes: '200' });
+    for (const cidr of props.uiAllowedCidrs ?? []) {
+      this.uiService.loadBalancer.connections.allowFrom(
+        ec2.Peer.ipv4(cidr), ec2.Port.tcp(80), `UI access from ${cidr}`,
+      );
+    }
     this.serverService.connections.allowFrom(
       this.uiService.service,
       ec2.Port.tcp(GRPC_PORT),

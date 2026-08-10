@@ -76,6 +76,9 @@ new TemporalStack(app, name('TemporalStack'), {
   existingHostedZone:
     hostedZoneId && zoneName ? { hostedZoneId, zoneName } : undefined,
   publicUi: str('publicUi') !== 'false',
+  // -c uiAllowedCidrs=203.0.113.7/32,198.51.100.0/24 locks the public UI
+  // to those ranges; omit for the open demo posture.
+  uiAllowedCidrs: str('uiAllowedCidrs')?.split(',').map((c) => c.trim()),
   serviceDiscovery: str('serviceDiscovery') !== 'false',
   auroraVersion: str('auroraVersion'),
   e2eWorker:

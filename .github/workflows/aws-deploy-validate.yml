@@ -154,6 +154,17 @@ jobs:
           curl -sf --max-time 10 "$UI/api/v1/settings" >/dev/null
           curl -s --max-time 10 "$UI/api/v1/namespaces?pageSize=10" | grep -q '"namespaces"'
           echo "VALIDATED: UI 200, settings API 200, namespaces listed (frontend + Aurora live)"
+          # Worker heartbeats (dynamic config): once the worker fleet is up
+          # and heartbeating, ListWorkers returns instances; without the
+          # dynamic config flag the RPC is refused.
+          for i in $(seq 1 20); do
+            if curl -s --max-time 10 "$UI/api/v1/namespaces/default/workers?pageSize=5" | grep -q workerInstanceKey; then
+              echo "VALIDATED: worker heartbeats enabled (ListWorkers returns live workers)"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "worker heartbeats never appeared"; exit 1
 
       - name: Validate — execute a real workflow on the deployed cluster
         if: inputs.mode != 'teardown-only'

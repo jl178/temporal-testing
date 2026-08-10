@@ -168,6 +168,33 @@ describe('import-existing mode', () => {
   });
 });
 
+describe('public UI with CIDR allowlist', () => {
+  const app = new App();
+  const shell = new Stack(app, 'Shell', { env: ENV });
+  const stack = new TemporalStack(app, 'Temporal', {
+    env: ENV,
+    vpc: importedVpc(shell),
+    uiAllowedCidrs: ['203.0.113.7/32', '198.51.100.0/24'],
+  });
+  const template = Template.fromStack(stack);
+
+  test('grants ingress only to the allowlisted CIDRs, never 0.0.0.0/0', () => {
+    for (const cidr of ['203.0.113.7/32', '198.51.100.0/24']) {
+      template.hasResourceProperties('AWS::EC2::SecurityGroup', {
+        SecurityGroupIngress: Match.arrayWith([
+          Match.objectLike({ CidrIp: cidr, FromPort: 80, IpProtocol: 'tcp' }),
+        ]),
+      });
+    }
+    const sgs = template.findResources('AWS::EC2::SecurityGroup');
+    for (const sg of Object.values(sgs)) {
+      for (const rule of (sg as any).Properties?.SecurityGroupIngress ?? []) {
+        expect(rule.CidrIp).not.toBe('0.0.0.0/0');
+      }
+    }
+  });
+});
+
 describe('service discovery disabled', () => {
   const app = new App();
   const shell = new Stack(app, 'Shell', { env: ENV });
