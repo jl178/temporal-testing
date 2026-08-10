@@ -81,9 +81,7 @@ jobs:
                 "Effect": "Allow",
                 "Action": ["cloudformation:*"],
                 "Resource": [
-                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/TemporalNetworkStack-$SUFFIX/*",
-                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/TemporalStack-$SUFFIX/*",
-                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/TemporalDataStack-$SUFFIX/*",
+                  "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/Temporal*-$SUFFIX/*",
                   "arn:aws:cloudformation:us-east-1:$ACCOUNT:stack/$TOOLKIT_STACK/*"
                 ]
               },
@@ -102,9 +100,7 @@ jobs:
                   "arn:aws:glue:us-east-1:$ACCOUNT:database/raw",
                   "arn:aws:glue:us-east-1:$ACCOUNT:database/analytics",
                   "arn:aws:glue:us-east-1:$ACCOUNT:table/raw/*",
-                  "arn:aws:glue:us-east-1:$ACCOUNT:table/analytics/*",
-                  "arn:aws:glue:us-east-1:$ACCOUNT:userDefinedFunction/raw/*",
-                  "arn:aws:glue:us-east-1:$ACCOUNT:userDefinedFunction/analytics/*"
+                  "arn:aws:glue:us-east-1:$ACCOUNT:table/analytics/*"
                 ]
               }
             ]
