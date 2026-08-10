@@ -92,6 +92,20 @@ jobs:
                 "Effect": "Allow",
                 "Action": ["cloudformation:ValidateTemplate", "cloudformation:DescribeStacks"],
                 "Resource": "*"
+              },
+              {
+                "Sid": "GlueValidateAndCleanOurDatabases",
+                "Effect": "Allow",
+                "Action": ["glue:GetDatabase", "glue:GetTables", "glue:DeleteDatabase", "glue:DeleteTable"],
+                "Resource": [
+                  "arn:aws:glue:us-east-1:$ACCOUNT:catalog",
+                  "arn:aws:glue:us-east-1:$ACCOUNT:database/raw",
+                  "arn:aws:glue:us-east-1:$ACCOUNT:database/analytics",
+                  "arn:aws:glue:us-east-1:$ACCOUNT:table/raw/*",
+                  "arn:aws:glue:us-east-1:$ACCOUNT:table/analytics/*",
+                  "arn:aws:glue:us-east-1:$ACCOUNT:userDefinedFunction/raw/*",
+                  "arn:aws:glue:us-east-1:$ACCOUNT:userDefinedFunction/analytics/*"
+                ]
               }
             ]
           }
@@ -254,8 +268,9 @@ jobs:
               aws cloudformation wait stack-delete-complete --stack-name "$s" && break || true
             done
           done
-          # Glue databases are created by the job (not CFN) — remove them.
-          for db in raw analytics default; do
+          # Glue databases are created by the job (not CFN) — remove OURS
+          # only (never `default`: it's the account's shared database).
+          for db in raw analytics; do
             aws glue delete-database --name "$db" 2>/dev/null || true
           done
           aws cloudformation delete-stack --stack-name "$TOOLKIT_STACK" || true
