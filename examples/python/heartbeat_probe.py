@@ -13,14 +13,16 @@ host = os.environ["TEMPORAL_ADDRESS"].rsplit(":", 1)[0]
 namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
 url = f"http://{host}:7243/api/v1/namespaces/{namespace}/workers?pageSize=5"
 
-for _ in range(16):
+for attempt in range(16):
     try:
         body = urllib.request.urlopen(url, timeout=5).read().decode()
         if "workerInstanceKey" in body:
-            print("WORKERS:", body[:400])
+            print("WORKERS:", body[:400], flush=True)
             sys.exit(0)
-        print("no workers yet:", body[:200])
+        print(f"attempt {attempt + 1}: no workers in response: {body[:500]}", flush=True)
     except Exception as exc:  # noqa: BLE001 — every failure is just "retry"
-        print("retry:", exc)
+        detail = getattr(exc, "file", None)
+        detail = detail.read().decode()[:300] if detail else ""
+        print(f"attempt {attempt + 1}: {exc} {detail}", flush=True)
     time.sleep(15)
 sys.exit(1)
