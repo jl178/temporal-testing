@@ -213,7 +213,7 @@ What the construct wires for you:
 - **Task definition** — team image + the worker_platform command;
   `TEMPORAL_ADDRESS` / `TEMPORAL_NAMESPACE` / `TEMPORAL_TASK_QUEUE` env;
   CloudWatch logs (1-week retention).
-- **Autoscaling** — a 1-minute Lambda polls `DescribeTaskQueue` (enhanced
+- **Autoscaling** — a 1-minute Lambda polls `DescribeTaskQueue` (reportStats,
   backlog stats) through the cluster's HTTP API, publishes
   `ApproximateBacklogCount` to CloudWatch, and the service step-scales on
   it: +1 at the threshold, +3 at 4×, drain to min on empty.

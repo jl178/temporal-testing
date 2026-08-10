@@ -93,8 +93,8 @@ export interface TemporalWorkerServiceProps {
   readonly environment?: Record<string, string>;
   /**
    * Scale the fleet on task-queue backlog. A 1-minute EventBridge-driven
-   * Lambda polls Temporal's DescribeTaskQueue HTTP API (enhanced mode
-   * backlog statistics), publishes ApproximateBacklogCount /
+   * Lambda polls Temporal's DescribeTaskQueue HTTP API (reportStats per
+   * task type), publishes ApproximateBacklogCount /
    * ApproximateBacklogAgeSeconds to CloudWatch, and the service
    * step-scales on backlog depth. Omit for a fixed-size fleet.
    */
@@ -171,7 +171,7 @@ export class TemporalWorkerService extends Construct {
     const metricNamespace = scaling.metricNamespace ?? 'Temporal/TaskQueue';
     const dimensions = { TaskQueue: props.taskQueue, TemporalNamespace: namespace };
 
-    // Poller: DescribeTaskQueue (enhanced mode) -> CloudWatch. Uses the
+    // Poller: DescribeTaskQueue (reportStats, per task type) -> CloudWatch. Uses the
     // Temporal HTTP API so the Lambda needs only the Python stdlib + boto3.
     const poller = new lambda.Function(this, 'BacklogPoller', {
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -190,26 +190,28 @@ import boto3
 
 cloudwatch = boto3.client("cloudwatch")
 
+# Plain DescribeTaskQueue with reportStats, once per task type — the
+# ENHANCED api mode was removed from the server (400s on 1.29+); stats
+# now live on the default describe. protojson renders Durations as
+# fractional seconds with an "s" suffix.
 def handler(event, context):
     base = os.environ["TEMPORAL_HTTP_ENDPOINT"].rstrip("/")
     ns = os.environ["TEMPORAL_NAMESPACE"]
     task_queue = os.environ["TASK_QUEUE"]
-    url = (
-        f"{base}/api/v1/namespaces/{urllib.parse.quote(ns)}"
-        f"/task-queues/{urllib.parse.quote(task_queue, safe='')}"
-        "?apiMode=TASK_QUEUE_API_MODE_ENHANCED&reportStats=true"
-        "&versions.allActive=true"
-    )
-    with urllib.request.urlopen(url, timeout=10) as response:
-        data = json.load(response)
 
     backlog, oldest_age = 0, 0.0
-    for version in (data.get("versionsInfo") or {}).values():
-        for type_info in (version.get("typesInfo") or {}).values():
-            stats = type_info.get("stats") or {}
-            backlog += int(stats.get("approximateBacklogCount") or 0)
-            age = str(stats.get("approximateBacklogAge") or "0s").rstrip("s")
-            oldest_age = max(oldest_age, float(age or 0))
+    for tq_type in ("TASK_QUEUE_TYPE_WORKFLOW", "TASK_QUEUE_TYPE_ACTIVITY"):
+        url = (
+            f"{base}/api/v1/namespaces/{urllib.parse.quote(ns)}"
+            f"/task-queues/{urllib.parse.quote(task_queue, safe='')}"
+            f"?reportStats=true&taskQueueType={tq_type}"
+        )
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = json.load(response)
+        stats = data.get("stats") or {}
+        backlog += int(stats.get("approximateBacklogCount") or 0)
+        age = str(stats.get("approximateBacklogAge") or "0s").rstrip("s")
+        oldest_age = max(oldest_age, float(age or 0))
 
     dimensions = [
         {"Name": "TaskQueue", "Value": task_queue},

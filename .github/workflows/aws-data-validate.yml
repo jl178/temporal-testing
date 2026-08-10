@@ -9,6 +9,12 @@ name: aws-data-validate
 # after. Manual dispatch only.
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'full-cycle = deploy+validate+teardown; teardown-only = remove leftover stacks from a failed/kept run'
+        type: choice
+        default: full-cycle
+        options: [full-cycle, teardown-only]
 
 concurrency:
   group: aws-data-validate
@@ -48,6 +54,7 @@ jobs:
           echo "ACCOUNT=$ACCOUNT" >> "$GITHUB_ENV"
 
       - name: Preflight — net-new guarantee
+        if: inputs.mode != 'teardown-only'
         run: |
           for s in "TemporalNetworkStack-$SUFFIX" "TemporalStack-$SUFFIX" "TemporalDataStack-$SUFFIX" "$TOOLKIT_STACK"; do
             if aws cloudformation describe-stacks --stack-name "$s" >/dev/null 2>&1; then
@@ -95,6 +102,7 @@ jobs:
           sleep 30  # IAM propagation is eventually consistent
 
       - name: Bootstrap (isolated qualifier + toolkit)
+        if: inputs.mode != 'teardown-only'
         run: |
           for attempt in 1 2 3; do
             if npx cdk bootstrap "aws://$ACCOUNT/us-east-1" \
@@ -110,6 +118,7 @@ jobs:
           exit 1
 
       - name: Build and push the ETL worker + EMR dbt images
+        if: inputs.mode != 'teardown-only'
         working-directory: .
         run: |
           aws ecr create-repository --repository-name "$ETL_REPO" >/dev/null
@@ -128,7 +137,12 @@ jobs:
               "Sid": "EmrServerlessPull",
               "Effect": "Allow",
               "Principal": { "Service": "emr-serverless.amazonaws.com" },
-              "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+              "Action": [
+                "ecr:BatchGetImage",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:DescribeImages",
+                "ecr:BatchCheckLayerAvailability"
+              ],
               "Condition": { "StringEquals": { "aws:SourceAccount": "$ACCOUNT" } }
             }]
           }
@@ -140,6 +154,7 @@ jobs:
           echo "SFTP_PUBKEY=$(cat /tmp/sftp_key.pub)" >> "$GITHUB_ENV"
 
       - name: Deploy (network + temporal + data plane, suffixed)
+        if: inputs.mode != 'teardown-only'
         run: |
           npx cdk deploy --all --require-approval never \
             -c stackSuffix="$SUFFIX" \
@@ -153,6 +168,7 @@ jobs:
           cat /tmp/outputs.json
 
       - name: Validate — file lands in S3 through Transfer Family SFTP
+        if: inputs.mode != 'teardown-only'
         run: |
           DOUT() { jq -r ".\"TemporalDataStack-$SUFFIX\".$1" /tmp/outputs.json; }
           HOST=$(DOUT SftpEndpoint)
@@ -166,6 +182,7 @@ jobs:
           echo "VALIDATED: SFTP -> S3 landing (Transfer Family)"
 
       - name: Validate — ETL workflow runs dbt on EMR Serverless with Glue Iceberg
+        if: inputs.mode != 'teardown-only'
         run: |
           OUT() { jq -r ".\"TemporalStack-$SUFFIX\".$1" /tmp/outputs.json; }
           CLUSTER=$(OUT EtlClusterName)
@@ -194,6 +211,7 @@ jobs:
           echo "VALIDATED: ETL PIPELINE PASS on AWS (EMR Serverless compute)"
 
       - name: Validate — Iceberg tables registered in the Glue Data Catalog
+        if: inputs.mode != 'teardown-only'
         run: |
           for db in raw analytics; do
             echo "--- glue database: $db"
@@ -207,11 +225,20 @@ jobs:
       - name: Teardown — this run's infra ONLY
         if: always()
         run: |
-          npx cdk destroy --all --force \
-            -c stackSuffix="$SUFFIX" \
-            -c dataPlane=true \
-            -c "@aws-cdk/core:bootstrapQualifier=$QUALIFIER" \
-            --toolkit-stack-name "$TOOLKIT_STACK" || true
+          # Destroy in EXPLICIT dependency order with the SAME contexts as
+          # deploy: without them CDK can't see that TemporalStack imports
+          # the data-plane exports, deletes in the wrong order, and CFN
+          # cancels the delete (export in use) — gotchas.md.
+          for s in "TemporalStack-$SUFFIX" "TemporalDataStack-$SUFFIX" "TemporalNetworkStack-$SUFFIX"; do
+            npx cdk destroy "$s" --force --exclusively \
+              -c stackSuffix="$SUFFIX" \
+              -c dataPlane=true \
+              -c emrImageUri="teardown" \
+              -c sftpPublicKey="ssh-ed25519 teardown" \
+              -c etlRepo="$ETL_REPO" -c etlTag="teardown" \
+              -c "@aws-cdk/core:bootstrapQualifier=$QUALIFIER" \
+              --toolkit-stack-name "$TOOLKIT_STACK" || true
+          done
           # Glue databases are created by the job (not CFN) — remove them.
           for db in raw analytics default; do
             aws glue delete-database --name "$db" 2>/dev/null || true
