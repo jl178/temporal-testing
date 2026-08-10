@@ -108,9 +108,15 @@ jobs:
             ]
           }
           EOF
-          aws iam put-user-policy --user-name cicd_user \
-            --policy-name temporal-testing-ephemeral-cfn-data \
-            --policy-document file:///tmp/cfn-policy.json
+          # MANAGED policy (attach/detach), not inline: IAM's 2048-byte cap
+          # is the AGGREGATE of a user's inline policies, so two parallel
+          # run-grants collide; managed policies don't count against it.
+          ARN="arn:aws:iam::$ACCOUNT:policy/temporal-testing-ephemeral-cfn-data"
+          aws iam detach-user-policy --user-name cicd_user --policy-arn "$ARN" 2>/dev/null || true
+          aws iam delete-policy --policy-arn "$ARN" 2>/dev/null || true
+          aws iam create-policy --policy-name temporal-testing-ephemeral-cfn-data \
+            --policy-document file:///tmp/cfn-policy.json >/dev/null
+          aws iam attach-user-policy --user-name cicd_user --policy-arn "$ARN"
           sleep 30  # IAM propagation is eventually consistent
 
       # Runs in BOTH modes: stacks store the cfn-exec role ARN they were
@@ -349,7 +355,9 @@ jobs:
       - name: Revoke run-scoped IAM grant
         if: always()
         run: |
-          aws iam delete-user-policy --user-name cicd_user \
-            --policy-name temporal-testing-ephemeral-cfn-data || true
-          echo "remaining inline policies on cicd_user:"
+          ARN="arn:aws:iam::$ACCOUNT:policy/temporal-testing-ephemeral-cfn-data"
+          aws iam detach-user-policy --user-name cicd_user --policy-arn "$ARN" || true
+          aws iam delete-policy --policy-arn "$ARN" || true
+          echo "remaining policies on cicd_user (inline + attached):"
           aws iam list-user-policies --user-name cicd_user --output text
+          aws iam list-attached-user-policies --user-name cicd_user --output text
