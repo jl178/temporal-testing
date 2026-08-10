@@ -111,6 +111,19 @@ jobs:
             --policy-document file:///tmp/cfn-policy.json
           sleep 30  # IAM propagation is eventually consistent
 
+      - name: Reset derivative Glue state from prior cycles
+        if: inputs.mode != 'teardown-only'
+        run: |
+          # Stale raw/analytics databases from a half-cleaned run hold
+          # Iceberg tables whose metadata points at a TORN-DOWN bucket —
+          # dbt then dies on NoSuchBucketException (gotchas.md). These
+          # databases are derivative artifacts of this harness; recreate
+          # from scratch every cycle. `default` is never touched.
+          for db in raw analytics; do
+            aws glue delete-database --name "$db" 2>/dev/null \
+              && echo "deleted stale glue database: $db" || true
+          done
+
       # Runs in BOTH modes: stacks store the cfn-exec role ARN they were
       # created with — if the toolkit died before the app stacks, deletes
       # fail with "role cannot be assumed" until same-named roles exist
