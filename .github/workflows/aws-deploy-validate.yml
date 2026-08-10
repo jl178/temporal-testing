@@ -184,7 +184,18 @@ jobs:
           aws ecs wait tasks-stopped --cluster "$(OUT E2eClusterName)" --tasks "$TASK"
           EXIT=$(aws ecs describe-tasks --cluster "$(OUT E2eClusterName)" --tasks "$TASK" \
             --query 'tasks[0].containers[0].exitCode' --output text)
-          [ "$EXIT" = "0" ] || { echo "heartbeat probe exited $EXIT"; exit 1; }
+          if [ "$EXIT" != "0" ]; then
+            echo "heartbeat probe exited $EXIT — dumping evidence (teardown erases it):"
+            for lg in e2e-starter E2eWorker temporal-server; do
+              echo "===== /ecs/TemporalStack-$SUFFIX/$lg"
+              S=$(aws logs describe-log-streams --log-group-name "/ecs/TemporalStack-$SUFFIX/$lg" \
+                --order-by LastEventTime --descending --max-items 1 \
+                --query 'logStreams[0].logStreamName' --output text 2>/dev/null) || continue
+              aws logs get-log-events --log-group-name "/ecs/TemporalStack-$SUFFIX/$lg" \
+                --log-stream-name "$S" --query 'events[].message' --output text 2>/dev/null | tail -30
+            done
+            exit 1
+          fi
           echo "VALIDATED: worker heartbeats enabled (frontend ListWorkers returns live workers)"
 
       - name: Validate — execute a real workflow on the deployed cluster
