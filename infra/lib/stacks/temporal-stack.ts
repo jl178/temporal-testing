@@ -107,6 +107,17 @@ export class TemporalStack extends Stack {
       serviceDiscovery: props.serviceDiscovery,
     });
 
+    // D15 topology: worker fleets live in a separate WORKLOAD cluster —
+    // the platform cluster (server + UI) is the platform team's; on
+    // Fargate a cluster is a free namespace, so the boundary costs nothing.
+    const workloadCluster =
+      props.e2eWorker || props.etlWorker
+        ? new ecs.Cluster(this, 'WorkloadCluster', {
+            vpc: props.vpc,
+            clusterName: `${this.stackName}-workload`,
+          })
+        : undefined;
+
     if (props.domainName) {
       this.dns = new TemporalDns(this, 'Dns', {
         domainName: props.domainName,
@@ -128,7 +139,7 @@ export class TemporalStack extends Stack {
       const image = ecs.ContainerImage.fromEcrRepository(repo, props.e2eWorker.tag);
 
       const worker = new TemporalWorkerService(this, 'E2eWorker', {
-        ecsCluster: this.temporal.ecsCluster,
+        ecsCluster: workloadCluster!,
         image,
         temporalAddress: this.temporal.grpcEndpoint,
         taskQueue: 'greeting-tasks-python',
@@ -172,7 +183,7 @@ export class TemporalStack extends Stack {
         allowAllOutbound: true,
       });
 
-      new CfnOutput(this, 'E2eClusterName', { value: this.temporal.ecsCluster.clusterName });
+      new CfnOutput(this, 'E2eClusterName', { value: workloadCluster!.clusterName });
       new CfnOutput(this, 'E2eStarterTaskDef', { value: starterTask.taskDefinitionArn });
       new CfnOutput(this, 'E2eStarterSecurityGroup', { value: starterSg.securityGroupId });
       new CfnOutput(this, 'E2ePrivateSubnets', {
@@ -200,7 +211,7 @@ export class TemporalStack extends Stack {
 
       // Invariant: workflow workers never register activities — two fleets.
       const wfFleet = new TemporalWorkerService(this, 'EtlWorkflowWorker', {
-        ecsCluster: this.temporal.ecsCluster,
+        ecsCluster: workloadCluster!,
         image,
         temporalAddress: this.temporal.grpcEndpoint,
         taskQueue: 'etl-pipeline',
@@ -209,7 +220,7 @@ export class TemporalStack extends Stack {
           '--profile', 'xsmall', '--workflows', 'workflow'],
       });
       const actFleet = new TemporalWorkerService(this, 'EtlActivityWorker', {
-        ecsCluster: this.temporal.ecsCluster,
+        ecsCluster: workloadCluster!,
         image,
         temporalAddress: this.temporal.grpcEndpoint,
         taskQueue: 'etl-pipeline',
@@ -224,7 +235,7 @@ export class TemporalStack extends Stack {
       // The in-process compute fallback lane at its documented size —
       // deploys the `large` Fargate mapping (4 vCPU / 16 GB) for real.
       const computeFleet = new TemporalWorkerService(this, 'EtlComputeLarge', {
-        ecsCluster: this.temporal.ecsCluster,
+        ecsCluster: workloadCluster!,
         image,
         temporalAddress: this.temporal.grpcEndpoint,
         taskQueue: 'compute-large',
@@ -282,7 +293,7 @@ export class TemporalStack extends Stack {
         allowAllOutbound: true,
       });
 
-      new CfnOutput(this, 'EtlClusterName', { value: this.temporal.ecsCluster.clusterName });
+      new CfnOutput(this, 'EtlClusterName', { value: workloadCluster!.clusterName });
       new CfnOutput(this, 'EtlStarterTaskDef', { value: etlStarterTask.taskDefinitionArn });
       new CfnOutput(this, 'EtlStarterSecurityGroup', { value: etlStarterSg.securityGroupId });
       new CfnOutput(this, 'EtlPrivateSubnets', {
