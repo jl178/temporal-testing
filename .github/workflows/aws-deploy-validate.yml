@@ -161,6 +161,33 @@ jobs:
           curl -s --max-time 10 "$UI/api/v1/namespaces?pageSize=10" | grep -q '"namespaces"'
           echo "VALIDATED: UI 200, settings API 200, namespaces listed (frontend + Aurora live)"
 
+
+      - name: Validate — execute a real workflow on the deployed cluster
+        if: inputs.mode != 'teardown-only'
+        run: |
+          OUT() { jq -r ".\"TemporalStack-$SUFFIX\".$1" /tmp/outputs.json; }
+          CLUSTER=$(OUT E2eClusterName)
+          TASKDEF=$(OUT E2eStarterTaskDef)
+          SG=$(OUT E2eStarterSecurityGroup)
+          SUBNETS=$(OUT E2ePrivateSubnets)
+          LOGGROUP=$(OUT E2eStarterLogGroup)
+          TASK=$(aws ecs run-task --cluster "$CLUSTER" --launch-type FARGATE \
+            --task-definition "$TASKDEF" \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=DISABLED}" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "starter task: $TASK"
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK"
+          EXIT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "--- starter output:"
+          STREAM=$(aws logs describe-log-streams --log-group-name "$LOGGROUP" \
+            --order-by LastEventTime --descending --max-items 1 \
+            --query 'logStreams[0].logStreamName' --output text)
+          aws logs get-log-events --log-group-name "$LOGGROUP" --log-stream-name "$STREAM" \
+            --query 'events[].message' --output text || true
+          [ "$EXIT" = "0" ] || { echo "starter exited $EXIT"; exit 1; }
+          echo "VALIDATED: workflow executed end-to-end on AWS (starter exit 0 — worker fleet processed it)"
+
       - name: Validate — worker heartbeats via the frontend HTTP API (in-VPC)
         if: inputs.mode != 'teardown-only'
         run: |
@@ -189,32 +216,6 @@ jobs:
             exit 1
           fi
           echo "VALIDATED: worker heartbeats enabled (frontend ListWorkers returns live workers)"
-
-      - name: Validate — execute a real workflow on the deployed cluster
-        if: inputs.mode != 'teardown-only'
-        run: |
-          OUT() { jq -r ".\"TemporalStack-$SUFFIX\".$1" /tmp/outputs.json; }
-          CLUSTER=$(OUT E2eClusterName)
-          TASKDEF=$(OUT E2eStarterTaskDef)
-          SG=$(OUT E2eStarterSecurityGroup)
-          SUBNETS=$(OUT E2ePrivateSubnets)
-          LOGGROUP=$(OUT E2eStarterLogGroup)
-          TASK=$(aws ecs run-task --cluster "$CLUSTER" --launch-type FARGATE \
-            --task-definition "$TASKDEF" \
-            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=DISABLED}" \
-            --query 'tasks[0].taskArn' --output text)
-          echo "starter task: $TASK"
-          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK"
-          EXIT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
-            --query 'tasks[0].containers[0].exitCode' --output text)
-          echo "--- starter output:"
-          STREAM=$(aws logs describe-log-streams --log-group-name "$LOGGROUP" \
-            --order-by LastEventTime --descending --max-items 1 \
-            --query 'logStreams[0].logStreamName' --output text)
-          aws logs get-log-events --log-group-name "$LOGGROUP" --log-stream-name "$STREAM" \
-            --query 'events[].message' --output text || true
-          [ "$EXIT" = "0" ] || { echo "starter exited $EXIT"; exit 1; }
-          echo "VALIDATED: workflow executed end-to-end on AWS (starter exit 0 — worker fleet processed it)"
 
       - name: Validate — backlog autoscaling scales the fleet out
         if: inputs.mode != 'teardown-only'

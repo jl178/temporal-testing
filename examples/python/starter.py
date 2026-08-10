@@ -9,10 +9,19 @@ from worker import TASK_QUEUE
 
 
 async def main() -> None:
-    client = await Client.connect(
-        os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"),
-        namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
-    )
+    # Same startup resilience as the worker: fresh NLB targets register
+    # minutes after deploy.
+    address = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
+    namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
+    for attempt in range(12):
+        try:
+            client = await Client.connect(address, namespace=namespace)
+            break
+        except RuntimeError as exc:
+            print(f"connect attempt {attempt + 1} failed: {exc}", flush=True)
+            await asyncio.sleep(10)
+    else:
+        raise SystemExit(f"could not reach {address}")
     # Burst knob (default 1): N concurrent workflows to build a backlog —
     # used to exercise backlog autoscaling against a slot-capped fleet.
     n = int(os.environ.get("STARTER_ITERATIONS", "1"))
