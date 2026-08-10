@@ -9,9 +9,17 @@ name: aws-deploy-validate
 #   - a dedicated CDK bootstrap qualifier + toolkit stack name, so any
 #     pre-existing CDKToolkit in the account is never read or modified
 #   - create-everything mode: no -c imports, so no lookups of existing infra
-# Teardown runs even on failure so no billable resources are orphaned.
+# Teardown runs even on failure so no billable resources are orphaned —
+# unless mode=deploy-keep, which leaves the stack running for inspection
+# (tear it down later with mode=teardown-only).
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'full-cycle = deploy+validate+teardown; deploy-keep = leave it running; teardown-only = remove a kept stack'
+        type: choice
+        default: full-cycle
+        options: [full-cycle, deploy-keep, teardown-only]
 
 concurrency:
   group: aws-deploy-validate
@@ -43,11 +51,15 @@ jobs:
           cache-dependency-path: infra/package-lock.json
       - run: npm ci
 
-      - name: Preflight — identity + net-new guarantee
+      - name: Resolve account
         run: |
           aws sts get-caller-identity
           ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
           echo "ACCOUNT=$ACCOUNT" >> "$GITHUB_ENV"
+
+      - name: Preflight — net-new guarantee
+        if: inputs.mode != 'teardown-only'
+        run: |
           for s in "TemporalNetworkStack-$SUFFIX" "TemporalStack-$SUFFIX" "$TOOLKIT_STACK"; do
             if aws cloudformation describe-stacks --stack-name "$s" >/dev/null 2>&1; then
               echo "ABORT: stack $s already exists — refusing to touch it." >&2
@@ -91,6 +103,7 @@ jobs:
           sleep 30  # IAM propagation is eventually consistent
 
       - name: Bootstrap (isolated qualifier + toolkit)
+        if: inputs.mode != 'teardown-only'
         run: |
           # Retry: IAM grants propagate eventually; early CFN calls can 403.
           for attempt in 1 2 3; do
@@ -107,6 +120,7 @@ jobs:
           exit 1
 
       - name: Build and push the e2e worker image (ephemeral ECR repo)
+        if: inputs.mode != 'teardown-only'
         run: |
           aws ecr create-repository --repository-name "$E2E_REPO" >/dev/null
           aws ecr get-login-password | docker login --username AWS --password-stdin \
@@ -116,6 +130,7 @@ jobs:
           docker push "$ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/$E2E_REPO:$GITHUB_SHA"
 
       - name: Deploy (create-everything, suffixed, with e2e worker fleet)
+        if: inputs.mode != 'teardown-only'
         run: |
           npx cdk deploy --all --require-approval never \
             -c stackSuffix="$SUFFIX" \
@@ -126,6 +141,7 @@ jobs:
           cat /tmp/outputs.json
 
       - name: Validate — UI serves through ALB -> frontend -> Aurora
+        if: inputs.mode != 'teardown-only'
         run: |
           UI=$(jq -r ".\"TemporalStack-$SUFFIX\".UiUrl" /tmp/outputs.json)
           echo "UI: $UI"
@@ -140,6 +156,7 @@ jobs:
           echo "VALIDATED: UI 200, settings API 200, namespaces listed (frontend + Aurora live)"
 
       - name: Validate — execute a real workflow on the deployed cluster
+        if: inputs.mode != 'teardown-only'
         run: |
           OUT() { jq -r ".\"TemporalStack-$SUFFIX\".$1" /tmp/outputs.json; }
           CLUSTER=$(OUT E2eClusterName)
@@ -164,8 +181,14 @@ jobs:
           [ "$EXIT" = "0" ] || { echo "starter exited $EXIT"; exit 1; }
           echo "VALIDATED: workflow executed end-to-end on AWS (starter exit 0 — worker fleet processed it)"
 
+      - name: Report kept stack (deploy-keep)
+        if: inputs.mode == 'deploy-keep'
+        run: |
+          echo "STACK LEFT RUNNING for inspection — tear down with mode=teardown-only."
+          jq -r ".\"TemporalStack-$SUFFIX\" | \"UI:   \(.UiUrl)\ngRPC: \(.GrpcEndpoint)\"" /tmp/outputs.json
+
       - name: Teardown — this run's Temporal infra ONLY
-        if: always()
+        if: always() && inputs.mode != 'deploy-keep'
         run: |
           npx cdk destroy --all --force \
             -c stackSuffix="$SUFFIX" \
@@ -195,7 +218,7 @@ jobs:
           done
 
       - name: Post-teardown audit — nothing of ours remains
-        if: always()
+        if: always() && inputs.mode != 'deploy-keep'
         run: |
           leftovers=0
           for s in "TemporalNetworkStack-$SUFFIX" "TemporalStack-$SUFFIX" "$TOOLKIT_STACK"; do
@@ -212,8 +235,10 @@ jobs:
 
       # Runs AFTER the audit: the audit's describe-stacks needs this grant —
       # revoking it first would make "gone" indistinguishable from "denied".
+      # deploy-keep retains the grant: the later teardown-only run needs it
+      # (and re-puts it anyway — put-user-policy is idempotent).
       - name: Revoke run-scoped IAM grant
-        if: always()
+        if: always() && inputs.mode != 'deploy-keep'
         run: |
           aws iam delete-user-policy --user-name cicd_user \
             --policy-name temporal-testing-ephemeral-cfn || true
