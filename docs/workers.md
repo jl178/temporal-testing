@@ -87,7 +87,7 @@ The complex batch starts four fleets (default mode). Following
 | Server dispatches | Queue | Picked up by | Why |
 |---|---|---|---|
 | workflow task: `FileIngestWorkflow` starts | `file-ingest` | small (workflows) | deciding "call land next" is microseconds of replay |
-| activity `land_sftp_file` | `file-ingest` | medium (activities) | I/O stream; 1 of 16 slots |
+| activity `land_file` | `file-ingest` | medium (activities) | I/O stream; 1 of 16 slots |
 | workflow task: advance | `file-ingest` | small | never queued behind anyone's activity — small runs none |
 | activities `classify_route`, `resolve_transform_spec` | `file-ingest` | medium | metadata lookups on the thread pool |
 | workflow task: child `transform-payments-…` starts | `etl-pipeline` | small (etl) | the child's coordination |

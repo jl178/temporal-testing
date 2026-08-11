@@ -176,7 +176,7 @@ SFTP ──▶ s3://etl-data/landing/ ──▶ s3://etl-data/staged/ ──▶ 
 
 `FileIngestWorkflow` (task queue `file-ingest`) runs, per discovered file:
 
-1. **`land_sftp_file`** — streams the file from SFTP into the landing zone (heartbeats make big transfers crash-resumable; a per-file workflow ID doubles as the exactly-once guard).
+1. **`land_file`** — streams the file from the source (SFTP or SMB) into the landing zone (heartbeats make big transfers crash-resumable; a per-file workflow ID doubles as the exactly-once guard).
 2. **`parse_file`** — **file hygiene only**: permissive read (every column lands as a string — typing is semantic), mechanical header sanitization (`"Order ID"` → `order_id`), parquet out. Structurally broken files (bad encoding, unparseable CSV) go to `quarantine/` and are recorded per-file without failing the batch. Everything *semantic* — renames, casts, trims, dedupes — deliberately does **not** live here: it belongs to the route's **dbt staging models** (`stg_orders` does the `cast`/`trim`/`lower`), where transformations are versioned, tested, and documented. "Given rules/macros" = the route's dbt project; Jinja is the macro system.
 3. **`classify_file`** — reads the routing field (`record_type`) from the staged data.
 4. **`resolve_transform_spec`** — registry lookup: `etl/specs/registry.json` maps the route value to a spec file (`transform-spec-1.json`), which becomes a `DbtSparkJob` with the landed file wired in as its input. **Adding a new file type = adding a spec file + one registry line.**

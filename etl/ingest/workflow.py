@@ -94,6 +94,7 @@ class FileIngestWorkflow:
         return {
             "files_processed": len(results),
             "transformed": len(transformed),
+            "landed": sum(1 for r in results if r["status"] == "landed"),
             "quarantined": sum(1 for r in results if r["status"] == "quarantined"),
             "results": results,
             "consolidation": consolidation,
@@ -153,6 +154,16 @@ class FileIngestWorkflow:
                 "status": "quarantined",
                 "quarantine_key": quarantine_key,
                 "error": "no route pattern matched",
+            }
+
+        if not cfg.dispatch_transforms:
+            # Ingest-only mode: the file is landed, clean, and routed —
+            # transformation belongs to a downstream consumer.
+            return {
+                "file": filename,
+                "status": "landed",
+                "landed_key": landed_key,
+                "route": route,
             }
 
         job_kwargs = await workflow.execute_activity(

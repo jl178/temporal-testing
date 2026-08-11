@@ -147,3 +147,16 @@ docker exec etl-samba sh -c 'chmod 644 /upload/*'
 rm -rf "$TMP_DIR"
 SMB_HOST=localhost SMB_PORT=1445 ./.venv/bin/python -m ingest.starter
 echo "SMB SOURCE: PASS"
+
+# ---- Third leg: ingest-only (no transform dispatch) ------------------------
+# Land + preprocess + route + quarantine, but spawn no transform children —
+# the mode for batches whose transformation belongs to another system.
+echo "==> Ingest-only leg: land + route, no transform dispatch"
+docker exec etl-sftp sh -c 'rm -f /home/demo/upload/*'
+TMP_DIR=$(mktemp -d)
+make_batch 2026-10 "$TMP_DIR"
+for f in "$TMP_DIR"/*.csv*; do
+  docker cp "$f" "etl-sftp:/home/demo/upload/$(basename "$f")"
+done
+rm -rf "$TMP_DIR"
+INGEST_ONLY=1 ./.venv/bin/python -m ingest.starter

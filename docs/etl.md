@@ -161,7 +161,7 @@ Glue is enabled app-level on EMR; specs merely select `defaultCatalog`).
 
 ```mermaid
 flowchart TB
-    D["discover_sftp_files → 4 files"] --> P1 & P2 & P3 & P4
+    D["discover_files (SFTP or SMB) → 4 files"] --> P1 & P2 & P3 & P4
     subgraph par ["asyncio.gather — parallel per file"]
         P1["orders_….csv<br/>land → route: orders"] --> C1["child: transform-orders-…<br/>EMR ✓ · dbt tag:orders · validate ✓"]
         P2["customers_….csv<br/>land → route: customers<br/>(Seg/RGN aliased)"] --> C2["child: transform-customers-…"]
@@ -183,6 +183,47 @@ fail the child *non-retryably* and quarantine; transient deaths retry
 Child workflows give per-file isolation, per-file lineage, independent
 retry/reset in the UI, and task-queue routing — the documented production
 pattern for per-item pipelines.
+
+### How ingest triggers ETL — the mechanics
+
+The "trigger" from ingest to ETL is **not a call between services**: it is
+`workflow.execute_child_workflow(...)` (ingest/workflow.py), which sends a
+command to the *Temporal server* — "create an `EtlPipelineWorkflow`
+execution with this `DbtSparkJob` payload on queue `etl-pipeline`". Four
+properties follow, and they are the whole design:
+
+1. **What travels is data + a name, never code.** The server stores the
+   job JSON (built by `resolve_transform_spec` from the route's spec) and
+   the workflow-type string. The *code* lives in whichever fleet polls
+   `etl-pipeline` — so ingest and ETL deploy independently, and anything
+   able to produce the payload (schedule, CLI, another team's workflow)
+   can trigger the same pipeline.
+2. **The queue crossing is the fleet handoff.** The parent runs on
+   `file-ingest` fleets; the child names `task_queue="etl-pipeline"` and
+   is picked up by the ETL fleets. Neither knows where the other runs; a
+   jammed transform cannot stall file landing, and vice versa.
+3. **It is durable, with no broker of ours in between.** The spawn is
+   recorded before anything executes; if every worker dies mid-batch, the
+   child still exists and the suspended parent still resumes with its
+   result. There is no HTTP endpoint, no queue infrastructure to operate,
+   nothing to lose.
+4. **The child ID is the idempotency key.** `transform-<route>-<file>`
+   dedupes duplicate drops within a batch (recorded as `duplicate`, batch
+   continues); a child that rejects its column contract throws back into
+   the parent, which quarantines server-side and moves on.
+
+So the full cycle reduces to: *scheduled poll → land bytes → resolve the
+file into a job payload → ask the server to run that payload as a child on
+the ETL queue*. The only custom integration surface between the two
+pipelines is the `DbtSparkJob` contract; the rest is Temporal's own
+parent-child machinery.
+
+The dispatch is **optional**: `IngestConfig(dispatch_transforms=False)`
+(`INGEST_ONLY=1` for the starter) runs ingest as a product — land,
+preprocess, route, quarantine — spawning no children. The batch result
+maps file → route → `landed_key` for whatever system owns transformation;
+files still quarantine on bad archives or unknown patterns, so downstream
+consumers only ever see routed, well-formed objects under `landing/`.
 
 ## Worker topology (noisy-neighbor practice)
 

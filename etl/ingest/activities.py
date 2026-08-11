@@ -91,6 +91,11 @@ class IngestConfig:
     # transforms, to join their outputs. Requires a persistent catalog —
     # cross-job tables only exist when one is configured.
     consolidation_spec: str | None = None
+    # False = ingest-only: land, preprocess, route, quarantine — but spawn
+    # no transform children; a downstream consumer picks up from landing/
+    # using the batch result (file -> route -> landed_key). Default True
+    # preserves the full land->transform pipeline.
+    dispatch_transforms: bool = True
 
 
 def _sftp_conn(cfg: SftpSource):

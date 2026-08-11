@@ -4,4 +4,5 @@ pytest>=8,<9
 temporalio>=1.9,<2
 boto3>=1.34,<2
 asyncssh>=2.14,<3
+smbprotocol>=1.13,<2
 PyYAML>=6,<7

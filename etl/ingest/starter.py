@@ -32,12 +32,16 @@ async def main() -> None:
     from runtime_env import catalog_from_env, spark_remote_from_env
 
     catalog = catalog_from_env()
+    # INGEST_ONLY=1: land + route but spawn no transforms — a downstream
+    # consumer owns transformation.
+    ingest_only = os.environ.get("INGEST_ONLY") == "1"
     cfg = IngestConfig(
         smb=smb_from_env(),
         catalog=catalog,
         spark_remote=spark_remote_from_env(),
         # Cross-route join needs the per-route tables to persist across jobs.
-        consolidation_spec="consolidation" if catalog else None,
+        consolidation_spec="consolidation" if catalog and not ingest_only else None,
+        dispatch_transforms=not ingest_only,
     )
     workflow_id = f"file-ingest-{uuid.uuid4()}"
     result = await client.execute_workflow(
@@ -51,6 +55,16 @@ async def main() -> None:
     )
     print("Workflow result:")
     print(json.dumps(result, indent=2))
+
+    if ingest_only:
+        assert result["landed"] == 3, result
+        assert result["transformed"] == 0, result
+        assert result["quarantined"] == 1, result
+        landed = [r for r in result["results"] if r["status"] == "landed"]
+        assert sorted(r["route"] for r in landed) == ["customers", "orders", "payments"]
+        assert all(r["landed_key"].startswith("landing/") for r in landed)
+        print("INGEST-ONLY: PASS (landed + routed; transformation left to a consumer)")
+        return
 
     by_route = {
         r["route"]: r for r in result["results"] if r["status"] == "transformed"
