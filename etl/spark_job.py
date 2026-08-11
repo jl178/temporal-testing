@@ -84,6 +84,10 @@ def resolve_project(project: str, work: str, s3) -> str:
     return project_dir
 
 
+# These pins live HERE, not in a shared config module, on purpose: this
+# file is uploaded to S3 and executed ALONE as the EMR entryPoint — it can
+# import nothing from the package. Anything it needs must be stdlib,
+# boto3/pyspark (provided by the runtime), or defined in this file.
 ICEBERG_PACKAGES = (
     "org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,"
     "org.apache.iceberg:iceberg-aws-bundle:1.11.0"

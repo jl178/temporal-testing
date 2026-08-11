@@ -7,7 +7,6 @@ with workflow.unsafe.imports_passed_through():
     from activities import (
         DbtSparkJob,
         run_local_transform,
-        seed_raw_data,
         submit_emr_job,
         validate_output,
     )
@@ -34,8 +33,10 @@ class EtlPipelineWorkflow:
     async def run(self, job: DbtSparkJob) -> dict:
         raw_rows = None
         if job.seed_demo_data:
+            # By NAME, not reference: the generic pipeline must not import
+            # demo code — only fleets that serve the demo register it.
             raw_rows = await workflow.execute_activity(
-                seed_raw_data,
+                "seed_raw_data",
                 job,
                 start_to_close_timeout=timedelta(minutes=1),
                 retry_policy=LIGHT_RETRY,

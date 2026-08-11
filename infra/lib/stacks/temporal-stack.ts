@@ -229,7 +229,7 @@ export class TemporalStack extends Stack {
         taskQueue: 'etl-pipeline',
         profile: 'small',
         command: ['python', '-m', 'worker_platform', '--queue', 'etl-pipeline',
-          '--profile', 'small', '--activities', 'activities'],
+          '--profile', 'small', '--activities', 'activities', '--activities', 'demo'],
         environment: dataEnv,
       });
       wfFleet.allowGrpcTo(this.temporal.serverService);

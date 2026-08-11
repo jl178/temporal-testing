@@ -2,8 +2,9 @@
 
 The pipeline is generic: `DbtSparkJob` describes any dbt-spark workload
 (inputs to land as Spark tables, a dbt project + CLI args, outputs to export
-to S3). `spark_job.py` executes the spec; the demo defaults below are just
-one instance (orders -> daily_revenue).
+to S3). `spark_job.py` executes the spec. The demo instance
+(orders -> daily_revenue) lives in demo.py; specs under specs/ build real
+instances (see ingest/).
 
 Execution posture (see docs/etl.md): by default the transform activity is a
 thin client — dbt compiles SQL and an EXTERNAL Spark service executes it
@@ -13,8 +14,6 @@ calls; local emulators don't run the compute). In-process Spark exists only
 as the explicit fallback, routed to the compute-large queue.
 """
 import asyncio
-import csv
-import io
 import json
 import os
 import shutil
@@ -33,16 +32,6 @@ from temporalio.exceptions import ApplicationError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-ORDERS = [
-    ("1", "acme", "2026-08-01", "120.50", "completed"),
-    ("2", "acme", "2026-08-01", "80.00", "completed"),
-    ("3", "globex", "2026-08-01", "42.25", "CANCELLED"),
-    ("4", "globex", "2026-08-02", "310.10", "completed"),
-    ("5", "initech", "2026-08-02", "55.99", "Completed"),
-    ("6", "initech", "2026-08-03", "12.00", "pending"),
-    ("7", "acme", "2026-08-03", "99.95", "completed"),
-]
-
 
 def _s3():
     return boto3.client("s3", endpoint_url=os.environ.get("AWS_ENDPOINT_URL") or None)
@@ -56,41 +45,42 @@ def _emr():
 
 @dataclass
 class DbtSparkJob:
-    """A generic dbt-spark workload. Keys are S3 keys within `bucket`."""
+    """A generic dbt-spark workload — a plain dataclass on purpose.
 
+    Temporal payloads are data contracts, not SDK objects: the SDK
+    serializes whatever you pass (dataclasses via the default JSON
+    converter), so there is no base class to extend — and coupling this
+    contract to SDK types would tie payload evolution to SDK upgrades.
+    Fields added later MUST carry a neutral default (that's what lets old
+    histories and in-flight workflows deserialize under new code); fields
+    below with defaults are exactly the optional/appended ones. The
+    demo instance lives in demo.py, never here.
+
+    Keys are S3 keys within `bucket`.
+    """
+
+    name: str
+    # [{key, table, format}] — landed as Spark tables before dbt runs
+    inputs: list
+    # [{table, key, format}] — exported to S3 after dbt runs
+    outputs: list
+    # The deployment's data lake (CDK injects ETL_BUCKET on AWS).
     bucket: str = DEFAULT_BUCKET
-    name: str = "daily-revenue"
     # dbt project directory, relative to etl/ (uploaded to S3 for EMR runs)
     project_dir: str = "dbt"
-    # Select only this job's models — the shared dbt project holds every
+    # Select this job's models — the shared dbt project holds every
     # route's models, and unselected ones would fail on missing sources.
-    dbt_args: list = field(default_factory=lambda: ["build", "--select", "tag:orders"])
+    dbt_args: list = field(default_factory=lambda: ["build"])
     dbt_vars: dict = field(default_factory=dict)
-    # [{key, table, format}] — landed as Spark tables before dbt runs
-    inputs: list = field(
-        default_factory=lambda: [
-            {"key": "raw/orders.csv", "table": "raw.orders", "format": "csv"}
-        ]
-    )
-    # [{table, key, format}] — exported to S3 after dbt runs
-    outputs: list = field(
-        default_factory=lambda: [
-            {
-                "table": "analytics.daily_revenue",
-                "key": "marts/daily_revenue.json",
-                "format": "json",
-            }
-        ]
-    )
     # Optional persistent table catalog (see spark_job.py docstring).
     # None -> ephemeral in-memory catalog, e.g.:
     #   {"type": "rest", "name": "lake", "uri": "http://localhost:8181",
     #    "warehouse": "s3://etl-data/warehouse"}         (local Iceberg REST)
     #   {"type": "glue", "name": "lake", "warehouse": "s3://bucket/warehouse"}
     catalog: dict | None = None
-    # Demo-only: seed the orders CSV as the first input. False when the
-    # inputs were produced upstream (e.g. by the ingest pipeline).
-    seed_demo_data: bool = True
+    # Demo-only: run the demo seeding activity first (see demo.py). Real
+    # workloads' inputs are produced upstream (e.g. by the ingest pipeline).
+    seed_demo_data: bool = False
     # Optional Spark Connect endpoint: dbt runs in the activity and the SQL
     # executes on the remote cluster. Locally sc://localhost:15002
     # (nix run .#spark-up); on AWS an EMR Serverless interactive session
@@ -139,22 +129,6 @@ class DbtSparkJob:
 # activity and workflow task on that worker). Blocking activities here are
 # therefore plain `def` — the SDK runs them on the worker's thread pool.
 # Only genuinely-async work (the transform subprocess) stays `async def`.
-
-
-@activity.defn
-def seed_raw_data(job: DbtSparkJob) -> int:
-    """Demo extract step: land the raw orders CSV in the S3 data lake."""
-    s3 = _s3()
-    try:
-        s3.create_bucket(Bucket=job.bucket)
-    except s3.exceptions.ClientError:
-        pass  # already exists
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["order_id", "customer", "order_date", "amount", "status"])
-    writer.writerows(ORDERS)
-    s3.put_object(Bucket=job.bucket, Key=job.inputs[0]["key"], Body=buf.getvalue())
-    return len(ORDERS)
 
 
 @activity.defn

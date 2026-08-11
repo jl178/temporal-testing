@@ -54,7 +54,7 @@ PIDS=()
 ./.venv/bin/python -m worker_platform --queue etl-pipeline --profile small \
   --workflows workflow &                                          PIDS+=($!)
 ./.venv/bin/python -m worker_platform --queue etl-pipeline --profile medium \
-  --activities activities &                                       PIDS+=($!)
+  --activities activities --activities demo &                                       PIDS+=($!)
 if [ -z "$SPARK_CONNECT_URI" ]; then
   ./.venv/bin/python -m worker_platform --queue compute-large --profile large \
     --activities activities:run_local_transform &                 PIDS+=($!)

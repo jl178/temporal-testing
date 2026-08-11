@@ -27,7 +27,7 @@ etl/
 ├── spark_job.py            # THE generic runner: executes any job spec (see below);
 │                           #   also the EMR spark-submit entry point
 ├── activities.py           # DbtSparkJob dataclass + activities:
-│                           #   seed_raw_data (demo), submit_emr_job (launcher+poll),
+│                           #   submit_emr_job (launcher+poll), demo.py: seed_raw_data,
 │                           #   run_local_transform (spark_job subprocess/client),
 │                           #   validate_output (metadata-first)
 ├── workflow.py             # EtlPipelineWorkflow: seed? → submit EMR → transform → validate
