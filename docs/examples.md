@@ -102,3 +102,15 @@ The variations at a glance (all validated):
 | Remote-Spark opt-out | `SPARK_CONNECT_URI="" ./etl/run.sh` | in-process fallback on the isolated heavy queue |
 | Namespace isolation | `TEMPORAL_NAMESPACE=team-data ./etl/run.sh` | the data team's pipeline in its own tenancy boundary |
 | Scheduled operation | `python -m ingest.schedule create · trigger · unpause` | the batch as a Temporal Schedule (hourly, overlap=skip) — validated by triggering a full run |
+
+## 6 · The lifecycle tenant — `examples/order-settlement/`
+
+Per-order pricing lifecycles with review gates, SLA timers, signals, live
+`Stage` lineage, an outbound remittance leg, and the settlements mart —
+the platform's approval/exception-workflow template. In depth:
+[order-settlement.md](order-settlement.md); how every flow composes:
+[flows.md](flows.md).
+
+```sh
+ICEBERG_REST_URI=http://localhost:8181 ./examples/order-settlement/run.sh   # ORDER SETTLEMENT: PASS
+```

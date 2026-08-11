@@ -73,6 +73,9 @@ jobs:
       - name: Platform demo (second tenant)
         run: ./examples/platform-demo/run.sh
 
+      - name: Order-settlement tenant (lifecycle gates, signals, SLA timers, settlements mart)
+        run: ICEBERG_REST_URI=http://localhost:8181 ./examples/order-settlement/run.sh
+
       - name: Collect logs on failure
         if: failure()
         run: |

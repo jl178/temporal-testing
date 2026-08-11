@@ -4,6 +4,8 @@
 |---|---|
 | [architecture.md](architecture.md) | The local platform, how the pieces connect, and the local ⇄ prod binding map |
 | [examples.md](examples.md) | Every runnable example: Temporal as a service, the four SDK examples, infra validation |
+| [order-settlement.md](order-settlement.md) | The lifecycle tenant: per-order gates, signals, SLA timers, live Stage lineage, outbound remittance |
+| [flows.md](flows.md) | The system map: every workflow, every trigger edge, and the composition rules |
 | [etl.md](etl.md) | **The deep dive** — the `etl/` pipeline end to end: specs, canonical model, execution modes, ingest, workers, failure handling |
 | [workers.md](workers.md) | The generic worker platform: size profiles, placement guide, what runs where |
 | [security.md](security.md) | Auth chains, RBAC, and the local-vs-prod security posture |

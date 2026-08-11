@@ -50,6 +50,7 @@ cd infra && npx jest && npx cdk synth --quiet       # 17 CDK tests (env: CDK_DEF
 ./etl/run.sh                                        # single transform e2e -> "ETL PIPELINE: PASS"
 ICEBERG_REST_URI=http://localhost:8181 ./etl/ingest/run.sh  # complex batch -> "INGEST PIPELINE: PASS" + "CONSOLIDATION: PASS"
 ./examples/platform-demo/run.sh                     # second tenant -> "PLATFORM DEMO: PASS"
+ICEBERG_REST_URI=http://localhost:8181 ./examples/order-settlement/run.sh  # lifecycle tenant -> "ORDER SETTLEMENT: PASS"
 nix run .#examples                                  # 4 SDK examples
 ```
 
@@ -76,6 +77,7 @@ standard AWS credential variables.
 | a new file type/route | spec file + registry line + schema.yml entity (+ mart) |
 | a new business metric | hand-written mart model (never generate marts) |
 | a new team/workload | own image (see `examples/platform-demo/`), own queues `{domain}-{concern}`, fleets via worker_platform, own namespace |
+| a human-gated lifecycle workload | signals + `wait_condition` + SLA timer + `Stage` upserts — copy `examples/order-settlement/` (docs/order-settlement.md; system map: docs/flows.md) |
 | a new worker size class | only when a *class* of fleets overrides the same way — extend both matrices (`worker_platform/profiles.py` + CDK `WORKER_PROFILE_SIZES`) |
 | preprocessing (decrypt/unzip) | byte-shaped activity like `preprocess_file`, under the four-test policy |
 

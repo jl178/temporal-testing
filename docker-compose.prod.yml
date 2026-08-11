@@ -148,7 +148,7 @@ services:
         until temporal operator cluster health --address temporal-nginx:7233 2>/dev/null | grep -q SERVING; do sleep 3; done
         temporal operator namespace create --namespace team-app  --retention 72h  --description "Application team"        || true
         temporal operator namespace create --namespace team-data --retention 168h --description "Data engineering (ETL)"  || true
-        for attr in BatchId Route SourceFile; do
+        for attr in BatchId Route SourceFile OrderId Stage; do
           temporal operator search-attribute create --name "$$attr" --type Keyword || true
         done
         echo "namespaces + search attributes ready"

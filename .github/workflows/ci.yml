@@ -50,6 +50,8 @@ jobs:
         run: docker build -f etl/Dockerfile -t temporal-testing/etl-worker:${{ github.sha }} .
       - name: Billing tenant worker image
         run: docker build -f examples/platform-demo/Dockerfile -t temporal-testing/billing-worker:${{ github.sha }} .
+      - name: Build order-settlement worker image
+        run: docker build -f examples/order-settlement/Dockerfile -t temporal-testing/settlement-worker:${{ github.sha }} .
       - name: Greeting app-worker image (prod compose stack's worker)
         run: docker build -f examples/python/Dockerfile -t temporal-testing/greeting-worker:${{ github.sha }} examples/python
 

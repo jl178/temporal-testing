@@ -7,3 +7,4 @@ sources:
       - name: orders
       - name: customers
       - name: payments
+      - name: settlements

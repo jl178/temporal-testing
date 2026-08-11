@@ -78,3 +78,57 @@ models:
       - name: paid_date
         data_type: date
         data_tests: [not_null]
+
+  - name: stg_settlements
+    description: >
+      Canonical settlement: one row per order outcome in a remittance
+      batch, as written by the order-settlement tenant's outbound leg.
+      Grain: order_ref within a batch.
+    columns:
+      - name: batch_id
+        description: The batch workflow id — joins back to workflow lineage.
+        data_type: string
+        data_tests: [not_null]
+      - name: order_ref
+        description: Vendor order reference.
+        data_type: string
+        data_tests: [not_null, unique]
+      - name: vendor
+        description: Vendor identifier, lowercased.
+        data_type: string
+        data_tests: [not_null]
+      - name: item_count
+        description: Units on the order (0 when denied at validation).
+        data_type: int
+      - name: submitted_amount
+        description: What the vendor asked for.
+        data_type: double
+        data_tests: [not_null]
+      - name: priced_amount
+        description: Contract-priced amount (0.0 when never priced).
+        data_type: double
+        data_tests: [not_null]
+      - name: variance_pct
+        description: Submitted vs priced, percent.
+        data_type: double
+      - name: outcome
+        description: Terminal lifecycle outcome.
+        data_type: string
+        meta: { expr: "lower(trim(outcome))" }
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ["settled", "denied", "escalated"]
+      - name: decision_source
+        description: What decided it.
+        data_type: string
+        data_tests:
+          - accepted_values:
+              values: ["auto", "reviewer", "validation", "sla_timeout"]
+      - name: payable_amount
+        description: What actually gets paid.
+        data_type: double
+        data_tests: [not_null]
+      - name: note
+        description: Reviewer note or denial reason.
+        data_type: string
