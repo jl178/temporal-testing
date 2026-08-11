@@ -50,7 +50,8 @@ etl/
 │   ├── transform-spec-1..3 #   per-route: source_table, dbt selector, aliases, outputs
 │   └── consolidation.json  #   tables-only spec (inputs: []) joining all routes
 └── ingest/                 # the file-ingestion pipeline
-    ├── run.sh              #   the complex-batch e2e (seeds 4 vendor files over SFTP)
+    ├── run.sh              #   the complex-batch e2e: one batch over SFTP, a second
+    │                       #   identical batch over SMB (source abstraction proven)
     ├── workflow.py         #   FileIngestWorkflow: parallel fan-out + consolidation
     ├── activities.py       #   discover/land/classify/quarantine/resolve (bytes+metadata only)
     └── schedule.py         #   Temporal Schedule: hourly batch (create/trigger/pause)
@@ -60,7 +61,7 @@ etl/
 
 ```mermaid
 flowchart LR
-    V["Vendor file<br/>(messy headers,<br/>strings only)"] -->|SFTP| L["s3://…/landing/<br/>(object, no schema)"]
+    V["Vendor file<br/>(messy headers,<br/>strings only)"] -->|SFTP / SMB| L["s3://…/landing/<br/>(object, no schema)"]
     L -->|"Spark reads s3a://<br/>hygiene: sanitize → alias → contract"| R["raw.* table<br/>(canonical names,<br/>all strings)"]
     R -->|"dbt: generated stg_* <br/>(casts + cleanup from schema.yml)"| S["stg_* table<br/>(canonical schema,<br/>typed + tested)"]
     S -->|"dbt: hand-written marts"| M["marts<br/>(daily_revenue,<br/>executive_summary…)"]

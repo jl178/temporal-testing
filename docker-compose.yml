@@ -72,6 +72,17 @@ services:
     networks:
       - temporal-network
 
+  # SMB test share — the second ingest source protocol (prod binding: FSx
+  # or an on-prem share over VPN/DX; AWS Transfer Family speaks no SMB).
+  samba:
+    image: dperson/samba
+    container_name: etl-samba
+    command: '-n -u "demo;demopass" -s "upload;/upload;yes;no;no;demo" -p'
+    ports:
+      - "1445:445"
+    networks:
+      - temporal-network
+
 networks:
   temporal-network:
     name: temporal-network

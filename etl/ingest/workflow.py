@@ -16,8 +16,8 @@ with workflow.unsafe.imports_passed_through():
         IngestConfig,
         classify_route,
         decompressed_name,
-        discover_sftp_files,
-        land_sftp_file,
+        discover_files,
+        land_file,
         preprocess_file,
         quarantine_file,
         resolve_consolidation_spec,
@@ -42,8 +42,9 @@ LIGHT_RETRY = RetryPolicy(maximum_attempts=5)
 
 @workflow.defn
 class FileIngestWorkflow:
-    """SFTP -> S3 landing -> route by filename pattern -> dispatch a
-    per-route transform spec as a child EtlPipelineWorkflow -> S3 curated.
+    """Source (SFTP or SMB) -> S3 landing -> route by filename pattern ->
+    dispatch a per-route transform spec as a child EtlPipelineWorkflow ->
+    S3 curated.
 
     The workers only move bytes and metadata; ALL data processing (hygiene,
     typing, transformation) happens in Spark + dbt on the cluster, driven by
@@ -58,7 +59,7 @@ class FileIngestWorkflow:
     @workflow.run
     async def run(self, cfg: IngestConfig) -> dict:
         files = await workflow.execute_activity(
-            discover_sftp_files,
+            discover_files,
             cfg,
             start_to_close_timeout=timedelta(minutes=1),
             retry_policy=LIGHT_RETRY,
@@ -100,7 +101,7 @@ class FileIngestWorkflow:
 
     async def _process_file(self, cfg: IngestConfig, filename: str) -> dict:
         landed_key = await workflow.execute_activity(
-            land_sftp_file,
+            land_file,
             args=[cfg, filename],
             start_to_close_timeout=timedelta(minutes=10),
             heartbeat_timeout=timedelta(minutes=1),

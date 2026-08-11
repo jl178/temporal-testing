@@ -9,9 +9,12 @@ query-shaped or unbounded — parsing, hygiene, typing, transformation —
 happens in Spark + dbt on the cluster (see spark_job.py: permissive read,
 header sanitization, column contracts — driven by each route's spec).
 
-On AWS, even the SFTP stream disappears: AWS Transfer Family lands vendor
-SFTP directly into S3 and an S3 event starts the workflow — the worker then
-touches no bytes at all.
+Sources are pluggable (SFTP or SMB — one per IngestConfig); discovery and
+landing dispatch on which source is configured. Prod bindings differ by
+protocol: AWS Transfer Family lands vendor SFTP directly into S3 (the
+worker then touches no bytes at all), but Transfer speaks no SMB — an SMB
+share (FSx, or on-prem over VPN/DX) keeps this worker-streamed landing
+path even in production, which is why it must stay policy-compliant.
 """
 import asyncio
 import fnmatch
@@ -23,6 +26,7 @@ from dataclasses import dataclass, field
 
 import asyncssh
 import boto3
+import smbclient
 import yaml
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -60,8 +64,22 @@ class SftpSource:
 
 
 @dataclass
+class SmbSource:
+    host: str = "localhost"
+    port: int = 1445
+    username: str = "demo"
+    password: str = "demopass"
+    share: str = "upload"
+    path: str = ""  # subdirectory within the share ("" = share root)
+    pattern: str = "*.csv*"
+
+
+@dataclass
 class IngestConfig:
     sftp: SftpSource = field(default_factory=SftpSource)
+    # When set, SMB is the batch's source and `sftp` is ignored. (Appended
+    # optional field — payloads recorded before it existed still replay.)
+    smb: SmbSource | None = None
     bucket: str = DEFAULT_BUCKET
     landing_prefix: str = "landing"
     quarantine_prefix: str = "quarantine"
@@ -87,9 +105,42 @@ def _sftp_conn(cfg: SftpSource):
     )
 
 
+_LAND_CHUNK = 8 * 1024**2
+
+
+def _smb_root(cfg: SmbSource) -> str:
+    base = rf"\\{cfg.host}\{cfg.share}"
+    return rf"{base}\{cfg.path}" if cfg.path else base
+
+
+def _smb_kwargs(cfg: SmbSource) -> dict:
+    return {"username": cfg.username, "password": cfg.password, "port": cfg.port}
+
+
+def _smb_list(cfg: SmbSource) -> list:
+    return [
+        n
+        for n in smbclient.listdir(_smb_root(cfg), **_smb_kwargs(cfg))
+        if fnmatch.fnmatch(n, cfg.pattern)
+    ]
+
+
+def _smb_fetch(cfg: SmbSource, filename: str, local: str) -> None:
+    """Chunked SMB read to disk — streamed, never whole-payload-in-RAM
+    (smbprotocol is synchronous; callers run this on a thread)."""
+    with smbclient.open_file(
+        rf"{_smb_root(cfg)}\{filename}", mode="rb", **_smb_kwargs(cfg)
+    ) as remote, open(local, "wb") as out:
+        while chunk := remote.read(_LAND_CHUNK):
+            out.write(chunk)
+
+
 @activity.defn
-async def discover_sftp_files(cfg: IngestConfig) -> list:
-    """List remote files matching the source pattern. Metadata only."""
+async def discover_files(cfg: IngestConfig) -> list:
+    """List remote files matching the source's pattern. Metadata only.
+    Dispatches on the configured source (SMB when set, else SFTP)."""
+    if cfg.smb:
+        return sorted(await asyncio.to_thread(_smb_list, cfg.smb))
     async with _sftp_conn(cfg.sftp) as conn:
         async with conn.start_sftp_client() as sftp:
             names = await sftp.listdir(cfg.sftp.path)
@@ -97,7 +148,7 @@ async def discover_sftp_files(cfg: IngestConfig) -> list:
 
 
 @activity.defn
-async def land_sftp_file(cfg: IngestConfig, filename: str) -> str:
+async def land_file(cfg: IngestConfig, filename: str) -> str:
     """Stream one remote file into the S3 landing zone (disk-buffered, not
     memory). Returns the S3 key. This is the only byte-moving activity."""
     s3 = _s3()
@@ -107,9 +158,13 @@ async def land_sftp_file(cfg: IngestConfig, filename: str) -> str:
         pass
     with tempfile.TemporaryDirectory() as tmp:
         local = os.path.join(tmp, filename)
-        async with _sftp_conn(cfg.sftp) as conn:
-            async with conn.start_sftp_client() as sftp:
-                await sftp.get(f"{cfg.sftp.path}/{filename}", local)
+        if cfg.smb:
+            # Blocking protocol client; never run it on the event loop.
+            await asyncio.to_thread(_smb_fetch, cfg.smb, filename, local)
+        else:
+            async with _sftp_conn(cfg.sftp) as conn:
+                async with conn.start_sftp_client() as sftp:
+                    await sftp.get(f"{cfg.sftp.path}/{filename}", local)
         activity.heartbeat(f"downloaded {filename}")
         key = f"{cfg.landing_prefix}/{filename}"
         # boto3 is blocking; never call it directly on the event loop.

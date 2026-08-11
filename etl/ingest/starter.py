@@ -6,8 +6,22 @@ import uuid
 from temporalio.client import Client
 from temporalio.common import SearchAttributePair, TypedSearchAttributes
 
-from ingest.activities import IngestConfig
+from ingest.activities import IngestConfig, SmbSource
 from ingest.workflow import BATCH_ID, TASK_QUEUE, FileIngestWorkflow
+
+
+def smb_from_env() -> SmbSource | None:
+    """SMB_HOST set = this batch's source is an SMB share."""
+    if not os.environ.get("SMB_HOST"):
+        return None
+    return SmbSource(
+        host=os.environ["SMB_HOST"],
+        port=int(os.environ.get("SMB_PORT", "1445")),
+        username=os.environ.get("SMB_USERNAME", "demo"),
+        password=os.environ.get("SMB_PASSWORD", "demopass"),
+        share=os.environ.get("SMB_SHARE", "upload"),
+        path=os.environ.get("SMB_PATH", ""),
+    )
 
 
 async def main() -> None:
@@ -19,6 +33,7 @@ async def main() -> None:
 
     catalog = catalog_from_env()
     cfg = IngestConfig(
+        smb=smb_from_env(),
         catalog=catalog,
         spark_remote=spark_remote_from_env(),
         # Cross-route join needs the per-route tables to persist across jobs.

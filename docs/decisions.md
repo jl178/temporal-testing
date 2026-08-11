@@ -11,7 +11,9 @@ images; deploy-order independence; queues buffer through downtime.
 
 **D2 — Local ≙ prod via bindings, with real components over mocks.** Every
 concern has an invariant contract (URI, config field, zone) with a local
-and a prod binding: SFTP container ⇄ Transfer Family, LocalEmu ⇄ S3,
+and a prod binding: SFTP container ⇄ Transfer Family, Samba container ⇄
+FSx/on-prem SMB share (Transfer speaks no SMB — that source keeps the
+policy-compliant worker-streamed landing even in prod), LocalEmu ⇄ S3,
 Spark Connect container ⇄ EMR Serverless session, Iceberg REST ⇄ Glue,
 Dex ⇄ corporate IdP, compose prod-mimic ⇄ CDK ECS/NLB/Aurora. Prefer a
 real engine locally (an actual Spark server) over control-plane mocks.

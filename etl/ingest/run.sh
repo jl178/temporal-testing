@@ -56,8 +56,11 @@ fi
 # Idempotent seeding: clear previous drops so renamed/recompressed files
 # can't coexist with stale twins.
 docker exec etl-sftp sh -c 'rm -f /home/demo/upload/*' 2>/dev/null || true
-TMP_DIR=$(mktemp -d)
-cat > "$TMP_DIR/orders_2026-08.csv" <<'EOF'
+# Fixture batch, parameterized by month so a second source protocol can
+# deliver a distinct batch (child workflow ids derive from filenames).
+make_batch() {
+  local month="$1" dir="$2"
+  cat > "$dir/orders_${month}.csv" <<'EOF'
 Order ID,Customer,Order Date,Amount,Status,record_type
 1,acme,2026-08-01,120.50,completed,orders
 2,acme,2026-08-01,80.00,completed,orders
@@ -69,7 +72,7 @@ Order ID,Customer,Order Date,Amount,Status,record_type
 EOF
 # Deliberately vendor-messy headers: Seg/RGN alias to segment/region via
 # the route spec's column_aliases (semantic normalization, cluster-side).
-cat > "$TMP_DIR/customers_2026-08.csv" <<'EOF'
+  cat > "$dir/customers_${month}.csv" <<'EOF'
 Customer,Seg,RGN,record_type
 acme,Enterprise,US,customers
 globex,SMB,EU,customers
@@ -77,15 +80,19 @@ initech,SMB,US,customers
 EOF
 # Compressed vendor drop: exercises the byte-shaped preprocess stage
 # (streaming gunzip on the worker) before routing.
-cat > "$TMP_DIR/payments_2026-08.csv" <<'EOF'
+  cat > "$dir/payments_${month}.csv" <<'EOF'
 Payment ID,Order ID,Paid Amount,Paid Date,record_type
 901,1,120.50,2026-08-02,payments
 902,2,80.00,2026-08-02,payments
 903,4,310.10,2026-08-03,payments
 904,5,55.99,2026-08-03,payments
 EOF
-gzip "$TMP_DIR/payments_2026-08.csv"
-head -c 200 /dev/urandom > "$TMP_DIR/zz_broken.csv"
+  gzip "$dir/payments_${month}.csv"
+  head -c 200 /dev/urandom > "$dir/zz_broken.csv"
+}
+
+TMP_DIR=$(mktemp -d)
+make_batch 2026-08 "$TMP_DIR"
 for f in "$TMP_DIR"/*.csv*; do
   docker cp "$f" "etl-sftp:/home/demo/upload/$(basename "$f")"
 done
@@ -121,3 +128,22 @@ trap 'kill "${PIDS[@]}" 2>/dev/null || true' EXIT
 sleep 3
 
 ./.venv/bin/python -m ingest.starter
+
+# ---- Second leg: identical pipeline, SMB source ----------------------------
+# Proves the source abstraction with a REAL second protocol: a fresh batch
+# (new month => new child ids) lands from a Samba share instead of SFTP.
+echo "==> SMB leg: same pipeline, second source protocol"
+if ! docker ps --format '{{.Names}}' | grep -q '^etl-samba$'; then
+  (cd .. && docker compose up -d samba)
+  sleep 3
+fi
+docker exec etl-samba sh -c 'rm -f /upload/*' 2>/dev/null || true
+TMP_DIR=$(mktemp -d)
+make_batch 2026-09 "$TMP_DIR"
+for f in "$TMP_DIR"/*.csv*; do
+  docker cp "$f" "etl-samba:/upload/$(basename "$f")"
+done
+docker exec etl-samba sh -c 'chmod 644 /upload/*'
+rm -rf "$TMP_DIR"
+SMB_HOST=localhost SMB_PORT=1445 ./.venv/bin/python -m ingest.starter
+echo "SMB SOURCE: PASS"

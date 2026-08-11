@@ -8,6 +8,7 @@ dbt-spark[session]>=1.11,<2
 # spark_job.py) — keep pyspark on the matching minor. [connect] pulls the
 # Spark Connect client (grpc) for spark_remote mode.
 pyspark[connect]>=4.1,<4.2
-# ingest pipeline: SFTP client
+# ingest pipeline: SFTP + SMB source clients
 asyncssh>=2.14,<3
+smbprotocol>=1.13,<2
 # (pandas/pyarrow arrive transitively via pyspark[connect]; no direct use)
